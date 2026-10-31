@@ -1,131 +1,78 @@
 import { MoreVertical } from 'lucide-react'
-import type { MouseEvent } from 'react'
-import { Card } from '@/components/ui/card'
+import type { KeyboardEvent, MouseEvent } from 'react'
 import { FileIcon } from '@/components/drive/FileIcon'
-import type { FileItem } from '@/data/drive-data'
+import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
-
-export type FileSizeScale = 'xs' | 'sm' | 'md' | 'lg'
-
-const scaleConfig: Record<FileSizeScale, {
-  grid: string
-  card: string
-  checkbox: string
-  menuBtn: string
-  iconShell: string
-  icon: string
-  title: string
-  date: string
-  tagsShell: string
-  tag: string
-  mtCard: string
-}> = {
-  xs: {
-    grid: 'grid-cols-3 sm:grid-cols-4 xl:grid-cols-6 gap-2',
-    card: 'p-2.5',
-    checkbox: 'h-4 w-4',
-    menuBtn: '-mr-2.5 -mt-2.5 h-7 w-7',
-    iconShell: 'h-10 w-10 mt-1',
-    icon: 'h-5 w-5 p-1',
-    title: 'text-[11px] min-h-7 mt-2',
-    date: 'text-[9px] mt-0.5',
-    tagsShell: 'mt-1.5 gap-1',
-    tag: 'px-1.5 py-0.5 text-[9px]',
-    mtCard: 'mt-2',
-  },
-  sm: {
-    grid: 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-2.5',
-    card: 'p-3',
-    checkbox: 'h-4.5 w-4.5',
-    menuBtn: '-mr-2 -mt-2 h-8 w-8',
-    iconShell: 'h-12 w-12 mt-2',
-    icon: 'h-7 w-7 p-1.5',
-    title: 'text-xs min-h-8 mt-3',
-    date: 'text-[10px] mt-1',
-    tagsShell: 'mt-2 gap-1.5',
-    tag: 'px-2 py-0.5 text-[10px]',
-    mtCard: 'mt-3',
-  },
-  md: {
-    grid: 'grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5',
-    card: 'p-4',
-    checkbox: 'h-5 w-5',
-    menuBtn: '-mr-2 -mt-2 h-10 w-10',
-    iconShell: 'h-16 w-16 sm:h-20 sm:w-20 mt-4',
-    icon: 'h-9 w-9 rounded-xl p-2 sm:h-11 sm:w-11',
-    title: 'line-clamp-2 min-h-10 text-sm font-extrabold text-slate-950 mt-5',
-    date: 'mt-2 truncate text-xs text-slate-500',
-    tagsShell: 'mt-3 flex flex-wrap justify-center gap-2 text-xs font-semibold text-slate-600',
-    tag: 'rounded-full bg-slate-100 px-2.5 py-1',
-    mtCard: 'mt-5',
-  },
-  lg: {
-    grid: 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6',
-    card: 'p-6',
-    checkbox: 'h-6 w-6',
-    menuBtn: '-mr-3 -mt-3 h-12 w-12',
-    iconShell: 'h-24 w-24 sm:h-32 sm:w-32 mt-6',
-    icon: 'h-14 w-14 rounded-2xl p-3 sm:h-18 sm:w-18',
-    title: 'line-clamp-2 min-h-12 text-base font-extrabold text-slate-950 mt-6 sm:text-lg',
-    date: 'mt-2 truncate text-sm text-slate-500',
-    tagsShell: 'mt-4 flex flex-wrap justify-center gap-2 text-sm font-semibold text-slate-600',
-    tag: 'rounded-full bg-slate-100 px-3 py-1.5',
-    mtCard: 'mt-6',
-  },
-}
+import type { FileItem } from '@/types/drive'
 
 export function FileGrid({
   files,
   selectedFileIds = new Set<string>(),
-  sizeScale = 'md',
+  detailsFileId = null,
+  onSelectFile,
   onFileContextMenu,
-  onToggleFile
+  onToggleFile,
 }: {
   files: FileItem[]
   selectedFileIds?: Set<string>
-  sizeScale?: FileSizeScale
+  detailsFileId?: string | null
+  onSelectFile?: (file: FileItem) => void
   onFileContextMenu?: (event: MouseEvent<HTMLElement>, file: FileItem) => void
   onToggleFile?: (file: FileItem) => void
 }) {
-  const cfg = scaleConfig[sizeScale]
+  const anySelected = selectedFileIds.size > 0
+
+  function onKeyDown(event: KeyboardEvent<HTMLElement>, file: FileItem) {
+    if (event.target !== event.currentTarget) return
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onSelectFile?.(file)
+    }
+  }
+
   return (
-    <div className={cn("mt-5 grid", cfg.grid)}>
+    <div className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {files.map((file) => {
-        const selected = selectedFileIds.has(file.id ?? '')
+        const checked = selectedFileIds.has(file.id ?? '')
+        const meta = file.accountLabel ? `${file.size} · ${file.accountLabel}` : file.size
+        const selected = checked || (file.id != null && file.id === detailsFileId)
         return (
-          <Card
+          <div
             key={file.id ?? file.name}
+            role="button"
+            tabIndex={0}
             draggable
             onDragStart={(event) => { event.dataTransfer.setData('text/plain', file.id ?? ''); event.dataTransfer.effectAllowed = 'move' }}
-            onClick={() => onToggleFile?.(file)}
+            onClick={() => onSelectFile?.(file)}
+            onKeyDown={(event) => onKeyDown(event, file)}
             onContextMenu={(event) => onFileContextMenu?.(event, file)}
             className={cn(
-              selected
-                ? 'relative cursor-grab active:cursor-grabbing overflow-hidden file-selected shadow-sm transition hover:-translate-y-0.5 hover:shadow-md'
-                : 'relative cursor-grab active:cursor-grabbing overflow-hidden transition hover:-translate-y-0.5 hover:shadow-md',
-              cfg.card
+              'group relative min-w-0 cursor-pointer rounded-[10px] border-[1.5px] bg-bg p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+              selected ? 'border-accent' : 'border-border hover:bg-hover',
             )}
           >
-            <div className="flex items-start justify-between gap-2">
-              <input type="checkbox" className={cn("shrink-0 accent-blue-600", cfg.checkbox)} checked={selected} onChange={() => onToggleFile?.(file)} onClick={(event) => event.stopPropagation()} />
-              <button className={cn("flex shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-white/80", cfg.menuBtn)} onClick={(event) => { event.stopPropagation(); onFileContextMenu?.(event, file) }} aria-label={`Open ${file.name} menu`}><MoreVertical className="h-4 w-4" /></button>
+            <div className={cn('relative flex h-[120px] items-center justify-center rounded-md', selected ? 'bg-accent-soft' : 'bg-surface')}>
+              <FileIcon kind={file.kind} className="h-8 w-8" />
+              {onToggleFile ? (
+                <span className={cn('absolute left-2 top-2 [@media(hover:none)]:opacity-100', anySelected || checked ? 'opacity-100' : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100')}>
+                  <Checkbox checked={checked} onChange={() => onToggleFile(file)} aria-label={`Select ${file.name}`} />
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-selected hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                onClick={(event) => { event.stopPropagation(); onFileContextMenu?.(event, file) }}
+                aria-label={`Open ${file.name} menu`}
+                aria-haspopup="menu"
+              >
+                <MoreVertical className="h-4 w-4" strokeWidth={1.5} />
+              </button>
             </div>
-
-            <div className="flex justify-center mt-2">
-              <div className={cn("flex items-center justify-center rounded-2xl bg-slate-100 text-slate-700", cfg.iconShell)}>
-                <FileIcon kind={file.kind} className={cfg.icon} />
-              </div>
+            <div className="min-w-0 px-1 pb-1 pt-2.5">
+              <p className="truncate text-[13px] font-medium text-text" title={file.name}>{file.name}</p>
+              <p className="mt-0.5 truncate text-[12px] tabular-nums text-muted" title={meta}>{meta}</p>
             </div>
-
-            <div className={cn("min-w-0 text-center", cfg.mtCard)}>
-              <h3 className={cn("font-extrabold text-slate-950 line-clamp-2", cfg.title)} title={file.name}>{file.name}</h3>
-              <p className={cfg.date}>{file.date}</p>
-              <div className={cn("flex flex-wrap justify-center font-semibold text-slate-600", cfg.tagsShell)}>
-                <span className={cn("rounded-full bg-slate-100", cfg.tag)}>{file.size}</span>
-                <span className={cn("max-w-full truncate rounded-full bg-slate-100", cfg.tag)}>{file.access}</span>
-              </div>
-            </div>
-          </Card>
+          </div>
         )
       })}
     </div>

@@ -1,16 +1,7 @@
 import { Folder } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { FolderItem } from '@/data/drive-data'
+import type { FolderItem } from '@/types/drive'
 
-const legacyColorMap: Record<string, string> = {
-  'text-blue-500': '#3b82f6',
-  'text-lime-500': '#84cc16',
-  'text-cyan-400': '#22d3ee',
-  'text-yellow-400': '#facc15',
-  'text-orange-500': '#f97316',
-}
-
-export const defaultFolderColor = '#3b82f6'
 export const defaultFolderIconUrl = 'https://api.iconify.design/lucide:folder.svg'
 
 export const folderIconOptions = [
@@ -61,24 +52,16 @@ export const folderIconOptions = [
   { label: 'Sparkles', url: 'https://api.iconify.design/lucide:sparkles.svg' },
 ]
 
-export const folderColorOptions = ['#3b82f6', '#84cc16', '#22d3ee', '#facc15', '#f97316', '#ef4444', '#a855f7', '#14b8a6']
-
-export function normalizeFolderColor(color?: string | null) {
-  if (color?.startsWith('#')) return color
-  return legacyColorMap[color ?? ''] ?? defaultFolderColor
-}
-
-export function iconUrlWithColor(iconUrl: string, color: string) {
-  const separator = iconUrl.includes('?') ? '&' : '?'
-  return `${iconUrl}${separator}color=${encodeURIComponent(color)}`
-}
-
-export function FolderVisual({ folder, className, iconClassName }: { folder: Pick<FolderItem, 'color' | 'iconUrl'>; className?: string; iconClassName?: string }) {
-  const color = normalizeFolderColor(folder.color)
-  const iconUrl = folder.iconUrl || defaultFolderIconUrl
+/** Folders use the `folder` token. A custom icon (set at creation) is drawn as a mask so it takes the token color too. */
+export function FolderVisual({ folder, className }: { folder: Pick<FolderItem, 'iconUrl'>; className?: string }) {
+  const custom = folder.iconUrl && folder.iconUrl !== defaultFolderIconUrl ? folder.iconUrl : null
+  if (!custom) return <Folder className={cn('shrink-0 text-folder', className)} strokeWidth={1.5} aria-hidden="true" />
+  const mask = `url("${custom}")`
   return (
-    <span className={cn('inline-flex items-center justify-center', className)}>
-      {iconUrl ? <img src={iconUrlWithColor(iconUrl, color)} alt="" className={cn('h-full w-full object-contain', iconClassName)} /> : <Folder className={cn('h-full w-full fill-current stroke-current', iconClassName)} style={{ color }} />}
-    </span>
+    <span
+      aria-hidden="true"
+      className={cn('inline-block shrink-0 bg-folder', className)}
+      style={{ maskImage: mask, WebkitMaskImage: mask, maskSize: 'contain', WebkitMaskSize: 'contain', maskRepeat: 'no-repeat', WebkitMaskRepeat: 'no-repeat', maskPosition: 'center', WebkitMaskPosition: 'center' }}
+    />
   )
 }
