@@ -26,7 +26,8 @@ export default defineConfig({
         ],
       },
       workbox: {
-        navigateFallbackDenylist: [/^\/(auth|connected-accounts|files|folders|invites|provider-configs|public|storage|uploads)(\/|$)/],
+        // Production serves the backend under /api (nginx proxy); the bare prefixes cover dev/custom VITE_API_URL setups.
+        navigateFallbackDenylist: [/^\/api\//, /^\/(auth|api-keys|audit-logs|connected-accounts|files|folders|invites|provider-configs|public|storage|system|uploads)(\/|$)/],
         globPatterns: ['**/*.{js,css,html,svg,ico,png,webp,woff2}'],
       },
     }),
