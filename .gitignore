@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.log
 .update-pending
+.update-staging/
 .DS_Store
 
 # Secrets
