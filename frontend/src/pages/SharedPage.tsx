@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Link2, MoreHorizontal, Users, X } from 'lucide-react'
+import { Check, File as FileIconGeneric, Folder, Link2, MoreHorizontal, Users, X } from 'lucide-react'
 import { FileIcon } from '@/components/drive/FileIcon'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -48,6 +48,7 @@ export function SharedPage() {
   const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
   const [shares, setShares] = useState<Share[]>([])
   const [invites, setInvites] = useState<Invite[]>([])
+  const [received, setReceived] = useState<Invite[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -57,10 +58,11 @@ export function SharedPage() {
     try {
       const [links, inv] = await Promise.all([
         apiFetch<{ shares: Share[] }>('/files/shared-links'),
-        apiFetch<{ sent: Invite[] }>('/invites'),
+        apiFetch<{ sent: Invite[]; received: Invite[] }>('/invites'),
       ])
       setShares(links.shares)
       setInvites(inv.sent)
+      setReceived(inv.received ?? [])
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to load shared items')
     } finally {
@@ -78,6 +80,7 @@ export function SharedPage() {
 
   async function copyLink(share: Share) {
     if (!share.url) return
+    setMessage('')
     try {
       await navigator.clipboard.writeText(share.url)
       setCopiedId(share.id)
@@ -88,6 +91,7 @@ export function SharedPage() {
   }
 
   async function revokeLink(share: Share) {
+    setMessage('')
     try {
       await apiFetch(`/files/${share.file.id}/share`, { method: 'DELETE' })
       setShares((prev) => prev.filter((s) => s.id !== share.id))
@@ -98,6 +102,7 @@ export function SharedPage() {
 
   async function revokeInvite(id: string) {
     setMenu(null)
+    setMessage('')
     try {
       await apiFetch(`/invites/${id}`, { method: 'DELETE' })
       setInvites((prev) => prev.filter((i) => i.id !== id))
@@ -176,6 +181,30 @@ export function SharedPage() {
                     >
                       <MoreHorizontal className="h-4 w-4" strokeWidth={1.5} />
                     </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section aria-labelledby="received">
+            <h2 id="received" className="mb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Shared with you</h2>
+            {received.length === 0 ? (
+              <EmptyState icon={<Users className="h-4 w-4" strokeWidth={1.5} />} title="Nothing shared with you" description="Files and folders other people invite you to will show up here." />
+            ) : (
+              <ul className="divide-y divide-border border-y border-border">
+                {received.map((invite) => (
+                  <li key={invite.id} className="flex min-h-12 items-center gap-3 px-2 py-1.5 hover:bg-hover">
+                    {invite.targetType === 'folder' ? <Folder className="h-4 w-4 shrink-0 text-folder" strokeWidth={1.5} aria-hidden="true" /> : <FileIconGeneric className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.5} aria-hidden="true" />}
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-text" title={invite.target?.name}>{invite.target?.name ?? 'Unavailable'}</span>
+                    <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate text-[13px] text-muted sm:block">
+                      {invite.targetType === 'folder' ? 'Folder' : 'File'} · {invite.target?.name ?? 'Unavailable'}
+                    </span>
+                    <Badge>{invite.role}</Badge>
+                    <span className="flex w-20 items-center gap-1.5 text-[13px] capitalize text-muted">
+                      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', invite.status === 'accepted' ? 'bg-drive' : 'bg-subtle')} aria-hidden="true" />
+                      {invite.status}
+                    </span>
                   </li>
                 ))}
               </ul>
