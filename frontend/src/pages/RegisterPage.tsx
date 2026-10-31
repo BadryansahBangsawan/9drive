@@ -100,15 +100,15 @@ export function RegisterPage() {
       </Button>
       <AuthDivider />
       <form onSubmit={submit} className="grid gap-4">
-        <label className="grid gap-1.5 text-[13px] font-medium text-text">Name<Input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-        <label className="grid gap-1.5 text-[13px] font-medium text-text">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+        <label className="grid gap-1.5 text-[13px] font-medium text-text">Name<Input autoComplete="name" aria-invalid={error ? true : undefined} aria-describedby={error ? 'auth-error' : undefined} value={name} onChange={(e) => setName(e.target.value)} required /></label>
+        <label className="grid gap-1.5 text-[13px] font-medium text-text">Email<Input type="email" autoComplete="email" aria-invalid={error ? true : undefined} aria-describedby={error ? 'auth-error' : undefined} value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
         <label className="grid gap-1.5 text-[13px] font-medium text-text">
           Password
-          <Input type="password" minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} required />
-          <span className="text-xs font-normal text-subtle">At least 8 characters.</span>
+          <Input type="password" autoComplete="new-password" minLength={8} aria-invalid={error ? true : undefined} aria-describedby={error ? 'password-hint auth-error' : 'password-hint'} value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
+        <p id="password-hint" className="-mt-2.5 text-xs text-subtle">At least 8 characters.</p>
         {recaptchaSiteKey ? <div className="min-h-[78px] overflow-hidden"><div ref={recaptchaRef} /></div> : null}
-        {error ? <p role="alert" className="text-[13px] text-danger">{error}</p> : null}
+        {error ? <p id="auth-error" role="alert" className="text-[13px] text-danger">{error}</p> : null}
         <Button size="lg" className="w-full" disabled={loading}>{loading ? 'Creating...' : 'Create account'}</Button>
       </form>
       <p className="mt-5 text-center text-[13px] text-muted">Already registered? <Link className="font-medium text-accent hover:underline" to="/login">Log in</Link></p>

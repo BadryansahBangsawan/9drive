@@ -54,9 +54,9 @@ export function LoginPage() {
       </Button>
       <AuthDivider />
       <form onSubmit={submit} className="grid gap-4">
-        <label className="grid gap-1.5 text-[13px] font-medium text-text">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
-        <label className="grid gap-1.5 text-[13px] font-medium text-text">Password<Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-        {error ? <p role="alert" className="text-[13px] text-danger">{error}</p> : null}
+        <label className="grid gap-1.5 text-[13px] font-medium text-text">Email<Input type="email" autoComplete="email" aria-invalid={error ? true : undefined} aria-describedby={error ? 'auth-error' : undefined} value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+        <label className="grid gap-1.5 text-[13px] font-medium text-text">Password<Input type="password" autoComplete="current-password" aria-invalid={error ? true : undefined} aria-describedby={error ? 'auth-error' : undefined} value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+        {error ? <p id="auth-error" role="alert" className="text-[13px] text-danger">{error}</p> : null}
         <Button size="lg" className="w-full" disabled={loading}>{loading ? 'Logging in...' : 'Log in'}</Button>
       </form>
       <p className="mt-5 text-center text-[13px] text-muted">No account? <Link className="font-medium text-accent hover:underline" to="/register">Register</Link></p>

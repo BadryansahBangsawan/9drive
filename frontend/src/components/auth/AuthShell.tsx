@@ -20,7 +20,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
 export function AuthDivider() {
   return (
     <div className="my-4 flex items-center gap-3 text-xs text-subtle">
-      <span className="h-px flex-1 bg-border" />or<span className="h-px flex-1 bg-border" />
+      <span aria-hidden="true" className="h-px flex-1 bg-border" />or<span aria-hidden="true" className="h-px flex-1 bg-border" />
     </div>
   )
 }
