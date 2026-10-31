@@ -5,6 +5,7 @@ import { prisma } from '../../config/prisma.js'
 import { env } from '../../config/env.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { hashToken, randomToken } from '../../utils/crypto.js'
+import { shareExpiresAt } from '../../utils/share-expiry.js'
 import { getAuthedGoogleClient, syncGoogleAppFolderFiles, syncGoogleQuota } from '../google/google.service.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile } from './stream-file.js'
@@ -91,6 +92,7 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
 })
 
 const batchFileSchema = z.object({ fileIds: z.array(z.string().min(1)).min(1).max(100) })
+const shareBodySchema = z.object({ expiresIn: z.enum(['never', '1d', '7d', '30d']).optional() })
 
 fileRouter.patch('/batch', async (req: AuthRequest, res, next) => {
   try {
@@ -290,15 +292,23 @@ fileRouter.post('/:id/share', async (req: AuthRequest, res, next) => {
     const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' } })
     const existingShare = await prisma.fileShare.findFirst({ where: { fileId: file.id, userId: req.user!.id, enabled: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'desc' } })
 
+    const body = shareBodySchema.parse(req.body ?? {})
     let shareId = existingShare?.id
     let token = existingShare?.token
+    let expiresAt = existingShare?.expiresAt ?? null
     if (!existingShare) {
       token = randomToken(32)
-      const share = await prisma.fileShare.create({ data: { fileId: file.id, userId: req.user!.id, token, tokenHash: hashToken(token) } })
+      expiresAt = shareExpiresAt(body.expiresIn ?? 'never')
+      const share = await prisma.fileShare.create({ data: { fileId: file.id, userId: req.user!.id, token, tokenHash: hashToken(token), expiresAt } })
       shareId = share.id
+      await createAuditLog(req.user!.id, 'CREATE_SHARE_LINK', 'file', file.id, { name: file.name, expiresAt: expiresAt?.toISOString() ?? null })
+    } else if (body.expiresIn) {
+      expiresAt = shareExpiresAt(body.expiresIn)
+      await prisma.fileShare.update({ where: { id: existingShare.id }, data: { expiresAt } })
+      await createAuditLog(req.user!.id, 'UPDATE_SHARE_LINK', 'file', file.id, { name: file.name, expiresAt: expiresAt?.toISOString() ?? null })
     }
 
-    return res.status(existingShare ? 200 : 201).json({ url: `${env.FRONTEND_URL}/public/files/${token}`, shareId })
+    return res.status(existingShare ? 200 : 201).json({ url: `${env.FRONTEND_URL}/public/files/${token}`, shareId, expiresAt: expiresAt?.toISOString() ?? null })
   } catch (error) {
     return next(error)
   }
@@ -331,7 +341,11 @@ fileRouter.post('/:id/public-permission', async (req: AuthRequest, res, next) =>
 fileRouter.delete('/:id/share', async (req: AuthRequest, res, next) => {
   try {
     const fileId = String(req.params.id)
-    await prisma.fileShare.updateMany({ where: { fileId, userId: req.user!.id, enabled: true }, data: { enabled: false } })
+    const revoked = await prisma.fileShare.updateMany({ where: { fileId, userId: req.user!.id, enabled: true }, data: { enabled: false } })
+    if (revoked.count > 0) {
+      const file = await prisma.file.findFirst({ where: { id: fileId, userId: req.user!.id }, select: { name: true } })
+      await createAuditLog(req.user!.id, 'REVOKE_SHARE_LINK', 'file', fileId, { name: file?.name })
+    }
     return res.json({ status: 'ok' })
   } catch (error) {
     return next(error)
