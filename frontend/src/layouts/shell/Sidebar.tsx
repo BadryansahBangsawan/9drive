@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { formatBytes } from '@/lib/api'
 import type { ConnectedAccount } from '@/lib/accounts'
 import { cn } from '@/lib/utils'
+import { LogoLockup } from '@/components/brand/Logo'
 
 const primaryNav = [
   { label: 'All files', icon: FileArchive, href: '/all-files' },
@@ -69,9 +70,8 @@ function StorageMeter({ accounts }: { accounts: ConnectedAccount[] }) {
 export function Sidebar({ accounts, onUpload, onNavigate }: { accounts: ConnectedAccount[]; onUpload: () => void; onNavigate?: () => void }) {
   return (
     <aside className="flex h-full w-full flex-col border-r border-border bg-surface">
-      <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-[13px] font-semibold text-primary-fg" aria-hidden="true">9</div>
-        <span className="text-[15px] font-semibold text-text">9Drive</span>
+      <div className="flex items-center px-4 pb-3 pt-4">
+        <LogoLockup className="h-[22px] w-auto" />
       </div>
       <div className="px-3 pb-3">
         <Button size="lg" className="w-full" onClick={() => { onUpload(); onNavigate?.() }}>

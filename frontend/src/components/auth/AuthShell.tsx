@@ -1,12 +1,8 @@
 import type { ReactNode } from 'react'
-import { HardDrive } from 'lucide-react'
+import { LogoMark } from '@/components/brand/Logo'
 
 export function AuthLogo() {
-  return (
-    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-fg" aria-hidden="true">
-      <HardDrive className="h-4 w-4" strokeWidth={1.5} />
-    </div>
-  )
+  return <LogoMark variant="full" className="h-12 w-auto" />
 }
 
 export function AuthShell({ children }: { children: ReactNode }) {
