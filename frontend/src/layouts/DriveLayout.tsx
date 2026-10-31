@@ -32,7 +32,7 @@ import { apiFetch, formatBytes } from '@/lib/api'
 import { useUpload } from '@/context/UploadContext'
 import { clearAuthSession, getStoredUser, updateStoredUser, type AuthUser } from '@/lib/auth'
 import { getGravatarUrl } from '@/lib/gravatar'
-import { setThemePreference } from '@/lib/theme'
+import { getAppliedTheme, onThemeChange, setThemePreference } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 const menu = [
@@ -218,9 +218,12 @@ export function DriveLayout() {
   const [headerActions, setHeaderActions] = useState<ReactNode>(null)
   const { uploadProgress, setUploadProgress, retryFailedUpload } = useUpload()
   const [uploadProgressCollapsed, setUploadProgressCollapsed] = useState(false)
-  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
-    document.documentElement.classList.contains('dark') ? 'dark' : 'light',
-  )
+  const [theme, setTheme] = useState<'light' | 'dark'>(getAppliedTheme)
+
+  useEffect(() => {
+    setTheme(getAppliedTheme())
+    return onThemeChange(setTheme)
+  }, [])
 
   // Advanced search states
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
@@ -245,9 +248,7 @@ export function DriveLayout() {
   })
 
   function toggleTheme() {
-    const next = theme === 'light' ? 'dark' : 'light'
-    setThemePreference(next)
-    setTheme(next)
+    setThemePreference(getAppliedTheme() === 'light' ? 'dark' : 'light')
   }
 
   async function loadSidebarStats() {
