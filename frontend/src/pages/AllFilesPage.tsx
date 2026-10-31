@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Check, CheckCircle, ChevronDown, ClipboardPaste, Download, FolderInput, FolderPlus, LayoutGrid, List, RefreshCw, Trash2, Upload, UserPlus, X } from 'lucide-react'
+import { Check, ChevronDown, ClipboardPaste, Download, FolderInput, FolderPlus, LayoutGrid, List, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Menu, MenuItem } from '@/components/ui/menu'
 import { DetailsPanel } from '@/components/drive/DetailsPanel'
-import { DummyModal } from '@/components/drive/DummyModal'
 import { EmptyAreaContextMenu } from '@/components/drive/EmptyAreaContextMenu'
 import { FileContextMenu } from '@/components/drive/FileContextMenu'
 import { FileGrid } from '@/components/drive/FileGrid'
@@ -17,6 +16,7 @@ import { FolderGrid } from '@/components/drive/FolderGrid'
 import { defaultFolderIconUrl, folderIconOptions, FolderVisual } from '@/components/drive/FolderVisual'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { SelectionBar } from '@/components/drive/SelectionBar'
+import { ShareDialog } from '@/components/drive/ShareDialog'
 import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { accountLabel as formatAccountLabel, type ConnectedAccount } from '@/lib/accounts'
 import { getAccessToken } from '@/lib/auth'
@@ -24,7 +24,6 @@ import { createPlyr, ensurePlyr } from '@/lib/plyr'
 import { getPreviewKind, officeViewerUrl } from '@/lib/preview'
 import { cn } from '@/lib/utils'
 import type { FileItem, FolderItem } from '@/types/drive'
-import { useUpload } from '@/context/UploadContext'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 
 type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccount?: { id: string; email: string; provider: string; displayName?: string | null }; folder?: { id: string; name: string } | null }
@@ -174,7 +173,6 @@ export function AllFilesPage() {
   const searchQuery = searchParams.get('q')?.trim() ?? ''
   const filterKey = filterParams.map((key) => searchParams.get(key) ?? '').join('|')
   const hasFilters = filterParams.some((key) => searchParams.get(key))
-  const [uploadOpen, setUploadOpen] = useState(false)
   const [folderOpen, setFolderOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [folderRenameOpen, setFolderRenameOpen] = useState(false)
@@ -184,8 +182,6 @@ export function AllFilesPage() {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
-  const [shareUrl, setShareUrl] = useState('')
-  const [copiedShareLink, setCopiedShareLink] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
   const [previewError, setPreviewError] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -195,9 +191,7 @@ export function AllFilesPage() {
   const [shareLinks, setShareLinks] = useState<Map<string, string | null>>(new Map())
   const [folders, setFolders] = useState<FolderItem[]>([])
   const [allFolders, setAllFolders] = useState<FolderItem[]>([])
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState('')
-  const [isUploadDragging, setIsUploadDragging] = useState(false)
   const [folderName, setFolderName] = useState('')
   const [folderIconUrl, setFolderIconUrl] = useState(defaultFolderIconUrl)
   const [renameValue, setRenameValue] = useState('')
@@ -218,17 +212,8 @@ export function AllFilesPage() {
   const [loading, setLoading] = useState(false)
   const [syncingDrive, setSyncingDrive] = useState(false)
   const [fileViewMode, setFileViewMode] = useState<FileViewMode>(getStoredFileViewMode)
-  const { uploadFiles } = useUpload()
   const isWide = useMediaQuery('(min-width: 1024px)')
 
-  // Shell "Upload" button navigates here with ?upload=1; open the modal and drop the param.
-  useEffect(() => {
-    if (searchParams.get('upload') !== '1') return
-    setUploadOpen(true)
-    const next = new URLSearchParams(searchParams)
-    next.delete('upload')
-    setSearchParams(next, { replace: true })
-  }, [searchParams])
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('viewer')
@@ -237,9 +222,8 @@ export function AllFilesPage() {
   const [inviteMessage, setInviteMessage] = useState('')
   const [inviting, setInviting] = useState(false)
   const previewVideoRef = useRef<HTMLVideoElement | null>(null)
-  const { setBreadcrumb } = useDriveLayoutActions()
+  const { setBreadcrumb, openUpload } = useDriveLayoutActions()
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([])
-  const [selectedTargetAccountId, setSelectedTargetAccountId] = useState('')
 
   function flash(text: string, ms = 3000) {
     setMessage(text)
@@ -365,30 +349,6 @@ export function AllFilesPage() {
     await loadFolders()
   }
 
-  async function uploadFile(event: FormEvent) {
-    event.preventDefault()
-    if (selectedFiles.length === 0) return
-    setLoading(true)
-    setMessage('')
-
-    const uploadingFiles = [...selectedFiles]
-    const targetFolderId = activeFolderId || selectedFolderId
-    const targetAccountId = selectedTargetAccountId || null
-
-    setSelectedFiles([])
-    setSelectedFolderId('')
-    setSelectedTargetAccountId('')
-    setUploadOpen(false)
-
-    try {
-      await uploadFiles(uploadingFiles, targetFolderId, targetAccountId)
-    } catch (err) {
-      console.error('Upload initiation failed:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   async function syncGoogleDrive() {
     setSyncingDrive(true)
     setMessage('')
@@ -411,25 +371,6 @@ export function AllFilesPage() {
     } finally {
       setSyncingDrive(false)
     }
-  }
-
-  function selectUploadFiles(files: FileList | File[] | null | undefined) {
-    if (!files) return
-    const nextFiles = Array.from(files)
-    if (nextFiles.length === 0) return
-    setSelectedFiles(nextFiles)
-  }
-
-  function removeUploadFile(index: number) {
-    setSelectedFiles((files) => files.filter((_, fileIndex) => fileIndex !== index))
-  }
-
-  function handleUploadDrag(event: DragEvent<HTMLLabelElement>) {
-    event.preventDefault()
-    event.stopPropagation()
-    if (event.type === 'dragenter' || event.type === 'dragover') setIsUploadDragging(true)
-    if (event.type === 'dragleave' || event.type === 'drop') setIsUploadDragging(false)
-    if (event.type === 'drop') selectUploadFiles(event.dataTransfer.files)
   }
 
   // The native contextmenu event also reaches the open Menu's document listener, which would close a menu
@@ -638,15 +579,6 @@ export function AllFilesPage() {
     window.dispatchEvent(new Event('9drive:storage-changed'))
   }
 
-  async function shareFile() {
-    if (!activeFile?.id) return
-    const data = await apiFetch<{ url: string }>(`/files/${activeFile.id}/share`, { method: 'POST' })
-    setShareUrl(data.url)
-    loadShares().catch(() => undefined)
-    setCopiedShareLink(false)
-    setShareOpen(true)
-  }
-
   async function copyShareLinkFor(file: FileItem) {
     if (!file.id) return
     try {
@@ -669,15 +601,6 @@ export function AllFilesPage() {
     } catch (err) {
       flash(`Failed to update Google Drive permission: ${err instanceof Error ? err.message : String(err)}`, 5000)
     }
-  }
-
-  function inviteToFile() {
-    if (!activeFile?.id) return
-    setInviteTargetType('file')
-    setInviteTargetId(activeFile.id)
-    setInviteMessage('')
-    setShareOpen(false)
-    setInviteOpen(true)
   }
 
   function inviteToFolder() {
@@ -714,12 +637,6 @@ export function AllFilesPage() {
     } finally {
       setInviting(false)
     }
-  }
-
-  async function copyShareLink() {
-    await navigator.clipboard.writeText(shareUrl)
-    setCopiedShareLink(true)
-    window.setTimeout(() => setCopiedShareLink(false), 1600)
   }
 
   async function renameFolder(event: FormEvent) {
@@ -893,7 +810,7 @@ export function AllFilesPage() {
                     description="Upload a file or create a folder to get started."
                     action={
                       <div className="flex flex-wrap justify-center gap-2">
-                        <Button onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" strokeWidth={1.5} />Upload</Button>
+                        <Button onClick={() => openUpload(activeFolderId)}><Upload className="h-4 w-4" strokeWidth={1.5} />Upload</Button>
                         <Button variant="secondary" onClick={() => setFolderOpen(true)}><FolderPlus className="h-4 w-4" strokeWidth={1.5} />New folder</Button>
                       </div>
                     }
@@ -923,7 +840,7 @@ export function AllFilesPage() {
         ) : null}
       </div>
 
-      <EmptyAreaContextMenu x={emptyContextMenu.x} y={emptyContextMenu.y} open={emptyContextMenu.open} canPasteFolder={Boolean(cutFolder)} onClose={() => setEmptyContextMenu({ x: 0, y: 0, open: false })} onUpload={() => setUploadOpen(true)} onCreateFolder={() => setFolderOpen(true)} onPasteFolder={() => { pasteFolder().catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to paste folder')) }} />
+      <EmptyAreaContextMenu x={emptyContextMenu.x} y={emptyContextMenu.y} open={emptyContextMenu.open} canPasteFolder={Boolean(cutFolder)} onClose={() => setEmptyContextMenu({ x: 0, y: 0, open: false })} onUpload={() => openUpload(activeFolderId)} onCreateFolder={() => setFolderOpen(true)} onPasteFolder={() => { pasteFolder().catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to paste folder')) }} />
       <FileContextMenu
         x={contextMenu.x}
         y={contextMenu.y}
@@ -935,7 +852,7 @@ export function AllFilesPage() {
         onRename={() => { setRenameValue(activeFile?.name ?? ''); setRenameOpen(true) }}
         onMove={() => openMoveFor(idsFor(activeFile))}
         onDetails={() => { setDetailsFileId(activeFile?.id ?? null); setSheetOpen(true) }}
-        onShare={() => { shareFile().catch((error) => flash(error instanceof Error ? error.message : 'Failed to create share link')) }}
+        onShare={() => setShareOpen(true)}
         onDelete={() => openTrashFor(idsFor(activeFile))}
       />
       <FolderContextMenu
@@ -966,64 +883,85 @@ export function AllFilesPage() {
         ) : null}
       </Dialog>
 
-      <DummyModal open={uploadOpen} title="Upload File" description="Stream file directly to selected Google Drive account." onClose={() => setUploadOpen(false)}>
-        <form onSubmit={uploadFile} className="grid gap-4">
-          <label onDragEnter={handleUploadDrag} onDragOver={handleUploadDrag} onDragLeave={handleUploadDrag} onDrop={handleUploadDrag} className={cn('grid cursor-pointer gap-3 rounded-[10px] border-2 border-dashed p-4 text-center transition-colors sm:p-6', isUploadDragging ? 'border-accent bg-accent-soft' : 'border-border bg-surface hover:border-accent')}>
-            <Upload className={cn('mx-auto h-8 w-8', isUploadDragging ? 'text-accent' : 'text-muted')} strokeWidth={1.5} />
-            <span className="text-[13px] font-medium text-text">Drop file here or click to browse</span>
-            <span className="text-[12px] text-muted">Metadata is sent before the file so upload can stream directly to Google Drive.</span>
-            <Input type="file" className="sr-only" multiple onChange={(event) => selectUploadFiles(event.target.files)} required={selectedFiles.length === 0} />
-          </label>
-          <label className={fieldLabelClass}>
-            Target Storage Account
-            <select className={selectClass} value={selectedTargetAccountId} onChange={(event) => setSelectedTargetAccountId(event.target.value)}>
-              <option value="">Automatic (Default)</option>
-              {connectedAccounts.map((account) => (
-                <option key={account.id} value={account.id}>{formatAccountLabel(account)}</option>
-              ))}
-            </select>
-          </label>
-          {activeFolder ? <p className="rounded-lg bg-surface p-3 text-[13px] text-muted">Uploading to: <b className="font-medium text-text">{activeFolder.name}</b></p> : <label className={fieldLabelClass}>Virtual Folder<select className={selectClass} value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)}><option value="">No folder</option>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
-          {selectedFiles.length > 0 ? <div className="grid max-h-56 gap-2 overflow-y-auto rounded-lg bg-surface p-3 text-[13px] text-muted"><div className="flex items-center justify-between gap-3"><span className="font-medium text-text">{selectedFiles.length} selected</span><span className="shrink-0">{formatBytes(selectedFiles.reduce((total, file) => total + file.size, 0))}</span></div>{selectedFiles.map((file, index) => <div key={`${file.name}-${file.size}-${index}`} className="flex min-w-0 items-center justify-between gap-3 rounded-md bg-bg px-3 py-2"><span className="min-w-0 flex-1 truncate" title={file.name}>{file.name}</span><span className="shrink-0 text-[12px]">{formatBytes(file.size)}</span><button type="button" className="shrink-0 text-muted hover:text-danger" onClick={() => removeUploadFile(index)} aria-label={`Remove ${file.name}`}><X className="h-4 w-4" strokeWidth={1.5} /></button></div>)}</div> : null}
-          <div className="grid gap-3 sm:flex sm:justify-end"><Button type="button" variant="secondary" onClick={() => setUploadOpen(false)}>Cancel</Button><Button disabled={loading || selectedFiles.length === 0}>{loading ? 'Uploading...' : `Upload${selectedFiles.length > 1 ? ` ${selectedFiles.length} files` : ''}`}</Button></div>
-        </form>
-      </DummyModal>
-      <DummyModal open={folderOpen} title="New Folder" description="Create a virtual folder for organizing files." onClose={() => setFolderOpen(false)}>
-        <form onSubmit={createFolder} className="grid gap-4">
-          <label className={fieldLabelClass}>Folder Name<Input value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="Project Assets" required /></label>
+      <Dialog
+        open={folderOpen}
+        onClose={() => setFolderOpen(false)}
+        title="New folder"
+        footer={<><Button variant="secondary" onClick={() => setFolderOpen(false)}>Cancel</Button><Button type="submit" form="new-folder-form">Create folder</Button></>}
+      >
+        <form id="new-folder-form" onSubmit={createFolder} className="grid gap-4">
+          <label className={fieldLabelClass}>Folder name<Input value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="Project assets" required /></label>
           <FolderIconPicker iconUrl={folderIconUrl} onIconChange={setFolderIconUrl} />
-          <div className="grid gap-3 pt-2 sm:flex sm:justify-end"><Button type="button" variant="secondary" onClick={() => setFolderOpen(false)}>Cancel</Button><Button>Create Folder</Button></div>
         </form>
-      </DummyModal>
-      <DummyModal open={renameOpen} title="Rename File" description={activeFile?.name ?? ''} onClose={() => setRenameOpen(false)}><form onSubmit={renameFile} className="grid gap-4"><Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} required /><div className="flex justify-end gap-3"><Button type="button" variant="secondary" onClick={() => setRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
-      <DummyModal open={moveOpen} title="Move to Folder" description={targetIds.length > 1 ? `Move ${targetIds.length} files` : files.find((file) => file.id === targetIds[0])?.name ?? ''} onClose={() => setMoveOpen(false)}><form onSubmit={moveFile} className="grid gap-4"><select className={selectClass} value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)}><option value="">No folder</option>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><div className="flex justify-end gap-3"><Button type="button" variant="secondary" onClick={() => setMoveOpen(false)}>Cancel</Button><Button>Move</Button></div></form></DummyModal>
-      <DummyModal open={deleteOpen} title="Move to Trash" description={targetIds.length > 1 ? `Move ${targetIds.length} files to Trash?` : `Move ${files.find((file) => file.id === targetIds[0])?.name ?? 'this file'} to Trash?`} onClose={() => setDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="secondary" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFile}>Move to Trash</Button></div></DummyModal>
-      <DummyModal open={shareOpen} title="Share Link" description={activeFile?.name ?? ''} onClose={() => setShareOpen(false)}>
-        <div className="grid gap-4">
-          <div>
-            <label className="mb-1 block text-[12px] font-medium text-muted">9Drive Public Share Link (No GDrive login required)</label>
-            <Input value={shareUrl} readOnly />
-          </div>
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button variant="secondary" onClick={inviteToFile}><UserPlus className="h-4 w-4" strokeWidth={1.5} />Invite member</Button>
-            <Button variant="secondary" onClick={() => setShareOpen(false)}>Close</Button>
-            <Button onClick={copyShareLink}>{copiedShareLink ? <CheckCircle className="h-4 w-4" strokeWidth={1.5} /> : null}{copiedShareLink ? 'Copied' : 'Copy Link'}</Button>
-          </div>
-          {copiedShareLink ? <p className="rounded-lg bg-accent-soft p-3 text-[13px] text-text">Share link copied to clipboard.</p> : null}
-        </div>
-      </DummyModal>
-      <DummyModal open={folderRenameOpen} title="Rename Folder" description={activeFolderForMenu?.name ?? ''} onClose={() => setFolderRenameOpen(false)}><form onSubmit={renameFolder} className="grid gap-4"><Input value={folderRenameValue} onChange={(event) => setFolderRenameValue(event.target.value)} required /><FolderIconPicker iconUrl={folderRenameIconUrl} onIconChange={setFolderRenameIconUrl} /><div className="flex justify-end gap-3"><Button type="button" variant="secondary" onClick={() => setFolderRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
-      <DummyModal open={folderDeleteOpen} title="Delete Folder" description={`Delete virtual folder ${activeFolderForMenu?.name ?? ''}? Files inside will remain uploaded.`} onClose={() => setFolderDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="secondary" onClick={() => setFolderDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFolder}>Delete</Button></div></DummyModal>
-      <DummyModal open={inviteOpen} title="Invite Member" description={`Share ${inviteTargetType === 'file' ? (activeFile?.name ?? 'file') : (activeFolderForMenu?.name ?? 'folder')} with a team member.`} onClose={() => setInviteOpen(false)}>
-        <form onSubmit={sendInvite} className="grid gap-4">
-          <label className={fieldLabelClass}>Email Address<Input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="member@example.com" required /></label>
+      </Dialog>
+      <Dialog
+        open={renameOpen}
+        onClose={() => setRenameOpen(false)}
+        title="Rename file"
+        footer={<><Button variant="secondary" onClick={() => setRenameOpen(false)}>Cancel</Button><Button type="submit" form="rename-file-form">Rename</Button></>}
+      >
+        <form id="rename-file-form" onSubmit={renameFile} className="grid gap-3">
+          <p className="truncate text-[13px] text-muted">{activeFile?.name}</p>
+          <Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} aria-label="File name" required />
+        </form>
+      </Dialog>
+      <Dialog
+        open={moveOpen}
+        onClose={() => setMoveOpen(false)}
+        title="Move to folder"
+        footer={<><Button variant="secondary" onClick={() => setMoveOpen(false)}>Cancel</Button><Button type="submit" form="move-file-form">Move</Button></>}
+      >
+        <form id="move-file-form" onSubmit={moveFile} className="grid gap-3">
+          <p className="truncate text-[13px] text-muted">{targetIds.length > 1 ? `Move ${targetIds.length} files` : files.find((file) => file.id === targetIds[0])?.name ?? ''}</p>
+          <select className={selectClass} value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)} aria-label="Destination folder">
+            <option value="">No folder</option>
+            {allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+          </select>
+        </form>
+      </Dialog>
+      <Dialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Move to Trash"
+        footer={<><Button variant="secondary" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFile}>Move to Trash</Button></>}
+      >
+        <p className="text-[13px] text-muted">{targetIds.length > 1 ? `Move ${targetIds.length} files to Trash?` : `Move ${files.find((file) => file.id === targetIds[0])?.name ?? 'this file'} to Trash?`}</p>
+      </Dialog>
+      <ShareDialog file={activeFile} open={shareOpen} onClose={() => setShareOpen(false)} onChanged={() => { loadShares().catch(() => undefined) }} />
+      <Dialog
+        open={folderRenameOpen}
+        onClose={() => setFolderRenameOpen(false)}
+        title="Rename folder"
+        footer={<><Button variant="secondary" onClick={() => setFolderRenameOpen(false)}>Cancel</Button><Button type="submit" form="rename-folder-form">Rename</Button></>}
+      >
+        <form id="rename-folder-form" onSubmit={renameFolder} className="grid gap-4">
+          <Input value={folderRenameValue} onChange={(event) => setFolderRenameValue(event.target.value)} aria-label="Folder name" required />
+          <FolderIconPicker iconUrl={folderRenameIconUrl} onIconChange={setFolderRenameIconUrl} />
+        </form>
+      </Dialog>
+      <Dialog
+        open={folderDeleteOpen}
+        onClose={() => setFolderDeleteOpen(false)}
+        title="Delete folder"
+        footer={<><Button variant="secondary" onClick={() => setFolderDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFolder}>Delete</Button></>}
+      >
+        <p className="text-[13px] text-muted">{`Delete virtual folder ${activeFolderForMenu?.name ?? ''}? Files inside will remain uploaded.`}</p>
+      </Dialog>
+      <Dialog
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        title="Invite member"
+        footer={<><Button variant="secondary" onClick={() => setInviteOpen(false)}>Cancel</Button><Button type="submit" form="invite-form" disabled={inviting}>{inviting ? 'Sending...' : 'Send invite'}</Button></>}
+      >
+        <form id="invite-form" onSubmit={sendInvite} className="grid gap-4">
+          <p className="text-[13px] text-muted">{`Share ${activeFolderForMenu?.name ?? 'folder'} with a team member.`}</p>
+          <label className={fieldLabelClass}>Email address<Input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="member@example.com" required /></label>
           <label className={fieldLabelClass}>Role<select className={selectClass} value={inviteRole} onChange={(event) => setInviteRole(event.target.value)}><option value="viewer">Can view</option><option value="editor">Can edit</option></select></label>
-          {inviteMessage ? <p className="rounded-lg bg-accent-soft p-3 text-[13px] text-text">{inviteMessage}</p> : null}
-          <div className="flex justify-end gap-3 pt-2"><Button type="button" variant="secondary" onClick={() => setInviteOpen(false)}>Cancel</Button><Button disabled={inviting}>{inviting ? 'Sending...' : 'Send Invite'}</Button></div>
+          {inviteMessage ? <p role="status" className="rounded-lg bg-accent-soft p-3 text-[13px] text-text">{inviteMessage}</p> : null}
         </form>
-      </DummyModal>
-      <DummyModal open={previewOpen} title="File Preview" description={activeFile?.name ?? ''} onClose={closePreview} className="overflow-hidden sm:max-w-[95vw] xl:max-w-[1400px]">
-        <div className="flex h-[72dvh] w-full items-center justify-center overflow-hidden rounded-[10px] border border-border bg-surface sm:h-[80vh]">
+      </Dialog>
+      <Dialog open={previewOpen} onClose={closePreview} title={activeFile?.name ?? 'Preview'} width={1400}>
+        <div className="flex h-[70dvh] w-full items-center justify-center overflow-hidden rounded-[10px] border border-border bg-surface">
           {previewLoading ? <div className="p-6 text-center text-[13px] font-medium text-muted">Loading preview...</div> : null}
           {previewError ? <div className="p-6 text-center text-[13px] text-danger">{previewError}</div> : null}
           {!previewLoading && !previewError && activePreviewKind === 'image' && previewUrl ? <img src={previewUrl} alt={activeFile?.name ?? 'File preview'} className="max-h-full max-w-full object-contain" onError={() => setPreviewError('Failed to load preview.')} /> : null}
@@ -1032,7 +970,6 @@ export function AllFilesPage() {
           {!previewLoading && !previewError && activePreviewKind === 'office' && previewUrl ? <iframe src={officeViewerUrl(previewUrl)} title={activeFile?.name ?? 'File preview'} className="h-full w-full border-0 bg-bg" /> : null}
           {!previewLoading && !previewError && !activePreviewKind ? <div className="p-6 text-center text-[13px] text-muted">Preview not available for this file type. Use Download instead.</div> : null}
         </div>
-      </DummyModal>
-    </>
-  )
+      </Dialog>
+    </>  )
 }

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { CheckCircle, Clipboard, KeyRound, ShieldCheck, Trash2, UploadCloud } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { DummyModal } from '@/components/drive/DummyModal'
+import { Dialog } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { API_URL, apiFetch, formatDate } from '@/lib/api'
 
@@ -105,12 +105,13 @@ export function ApiManagementPage() {
         </Card>
       </div>
 
-      <DummyModal open={createOpen} title="Create API Key" description="API keys can upload files using the public API." onClose={() => setCreateOpen(false)}>
+      <Dialog open={createOpen} title="Create API key" onClose={() => setCreateOpen(false)}>
+        <p className="mb-3 text-[13px] text-muted">API keys can upload files using the public API.</p>
         <form className="grid gap-4" onSubmit={createKey}>
           <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Key name" value={keyName} onChange={(event) => setKeyName(event.target.value)} required />
           <div className="grid gap-3 sm:flex sm:justify-end"><Button variant="outline" type="button" onClick={() => setCreateOpen(false)} disabled={loading}>Cancel</Button><Button type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Key'}</Button></div>
         </form>
-      </DummyModal>
+      </Dialog>
     </>
   )
 }

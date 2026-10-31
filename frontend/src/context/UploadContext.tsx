@@ -27,6 +27,37 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   })
   const [resumableSessions, setResumableSessions] = useState<Record<string, ResumableSession>>({})
 
+  function uploadSingleFileMultipart(file: File, folderId: string | null, accountId: string | null, onProgress: (percent: number) => void) {
+    return new Promise<void>((resolve, reject) => {
+      const form = new FormData()
+      // Text fields go before the file so the server can read them while streaming.
+      form.append('sizeBytes', String(file.size))
+      form.append('fileName', file.name)
+      form.append('mimeType', file.type || 'application/octet-stream')
+      if (folderId) form.append('folderId', folderId)
+      if (accountId) form.append('targetAccountId', accountId)
+      form.append('file', file, file.name)
+
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${API_URL}/uploads`)
+      xhr.setRequestHeader('Authorization', `Bearer ${getAccessToken()}`)
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)))
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress(100)
+          resolve()
+        } else {
+          reject(new Error(`Upload failed (${xhr.status})`))
+        }
+      }
+      xhr.onerror = () => reject(new Error('Upload failed'))
+      xhr.onabort = () => reject(new Error('Upload cancelled'))
+      xhr.send(form)
+    })
+  }
+
   async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, sessionIdToRetry?: string, targetAccountId?: string | null, onAccountLabel?: (label: string) => void) {
     const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks (must be multiple of 256KB for Google Drive)
     let sessionId = sessionIdToRetry || ''
@@ -40,7 +71,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
     // 1. Initialize or get status
     if (!sessionId) {
-      const initData = await apiFetch<{ sessionId?: string; provider: string; accountLabel?: string }>('/uploads/resumable/init', {
+      const initData = await apiFetch<{ sessionId?: string; provider: string; accountId?: string; accountLabel?: string }>('/uploads/resumable/init', {
         method: 'POST',
         body: JSON.stringify({
           fileName: file.name,
@@ -50,8 +81,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           targetAccountId: targetAccountId || undefined
         })
       })
-      sessionId = initData.sessionId as string
       if (initData.accountLabel) onAccountLabel?.(initData.accountLabel)
+      if (initData.provider === 's3') {
+        // S3 has no resumable session: send the whole file as one multipart request.
+        await uploadSingleFileMultipart(file, folderId, initData.accountId ?? targetAccountId ?? null, onProgress)
+        return
+      }
+      if (!initData.sessionId) throw new Error('Upload session was not created')
+      sessionId = initData.sessionId
       // Update session with the active sessionId
       setResumableSessions(prev => ({
         ...prev,

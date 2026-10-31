@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, type FormEvent } from 'react'
 import { Bell, Cloud, Database, Globe, HardDrive, Link2, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { DummyModal } from '@/components/drive/DummyModal'
+import { Dialog } from '@/components/ui/dialog'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { apiFetch, formatBytes } from '@/lib/api'
 import { getGravatarUrl } from '@/lib/gravatar'
@@ -440,7 +440,8 @@ export function SettingsPage() {
           <Card className="p-4"><Globe className="h-5 w-5 text-blue-600" /><h2 className="mt-2 text-[14px] font-bold">Region</h2><p className="mt-1 text-[12px] text-slate-500">Workspace region: local gateway.</p></Card>
         </div>
       </div>
-      <DummyModal open={s3Open} title="Connect S3 Storage" description="Use any S3-compatible provider with custom endpoint support." onClose={() => setS3Open(false)}>
+      <Dialog open={s3Open} title="Connect S3 storage" onClose={() => setS3Open(false)}>
+        <p className="mb-3 text-[13px] text-muted">Use any S3-compatible provider with custom endpoint support.</p>
         <form className="grid gap-4" onSubmit={connectS3}>
           <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Display name" value={s3Form.name} onChange={(event) => setS3Form({ ...s3Form, name: event.target.value })} required />
           <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Bucket" value={s3Form.bucket} onChange={(event) => setS3Form({ ...s3Form, bucket: event.target.value })} required />
@@ -452,8 +453,9 @@ export function SettingsPage() {
           <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={s3Form.forcePathStyle} onChange={(event) => setS3Form({ ...s3Form, forcePathStyle: event.target.checked })} />Force path style</label>
           <div className="grid gap-3 sm:flex sm:justify-end"><Button variant="outline" type="button" onClick={() => setS3Open(false)} disabled={connectingS3}>Cancel</Button><Button type="submit" disabled={connectingS3}>{connectingS3 ? 'Connecting...' : 'Connect S3'}</Button></div>
         </form>
-      </DummyModal>
-      <DummyModal open={Boolean(accountToDisconnect)} title="Disconnect storage?" description="This will remove this storage account from 9Drive. Existing file records for this account may no longer be usable." onClose={() => setAccountToDisconnect(null)}>
+      </Dialog>
+      <Dialog open={Boolean(accountToDisconnect)} title="Disconnect storage?" onClose={() => setAccountToDisconnect(null)}>
+        <p className="mb-3 text-[13px] text-muted">This will remove this storage account from 9Drive. Existing file records for this account may no longer be usable.</p>
         <div className="grid gap-4">
           <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
             <p className="font-semibold text-slate-950">{accountToDisconnect?.email}</p>
@@ -464,17 +466,12 @@ export function SettingsPage() {
             <Button variant="danger" onClick={disconnect} disabled={Boolean(disconnectingAccountId)}><Trash2 className="h-4 w-4" />{disconnectingAccountId ? 'Disconnecting...' : 'Disconnect'}</Button>
           </div>
         </div>
-      </DummyModal>
+      </Dialog>
 
-      <DummyModal
+      <Dialog
         open={updateModalOpen}
         title={updateModalTitle}
-        description={
-          updateFinished
-            ? (updateSuccess ? 'System updated successfully' : 'Update failed')
-            : 'Live installation logs'
-        }
-        className="max-w-2xl"
+        width={672}
         onClose={() => {
           if (!updateFinished) {
             if (!confirm('The update is still running in the background. Close log viewer?')) {
@@ -488,6 +485,7 @@ export function SettingsPage() {
           }
         }}
       >
+        <p className="mb-3 text-[13px] text-muted">{updateFinished ? (updateSuccess ? 'System updated successfully' : 'Update failed') : 'Live installation logs'}</p>
         <div className="grid gap-4">
           <div
             ref={logContainerRef}
@@ -528,7 +526,7 @@ export function SettingsPage() {
             )}
           </div>
         </div>
-      </DummyModal>
+      </Dialog>
     </>
   )
 }

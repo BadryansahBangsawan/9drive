@@ -6,12 +6,13 @@ import type { ConnectedAccount } from '@/lib/accounts'
 import { cn } from '@/lib/utils'
 import { Sidebar } from './shell/Sidebar'
 import { Topbar, type BreadcrumbItem } from './shell/Topbar'
+import { UploadDialog } from '@/components/drive/UploadDialog'
 import { UploadPanel } from './shell/UploadPanel'
 
 export type DriveLayoutContext = {
   setHeaderActions: (actions: ReactNode) => void
   setBreadcrumb: (items: BreadcrumbItem[]) => void
-  openUpload: () => void
+  openUpload: (folderId?: string | null) => void
 }
 
 export function useDriveLayoutActions() {
@@ -43,11 +44,14 @@ export function DriveLayout() {
     (items: BreadcrumbItem[]) => setCustom({ path: window.location.pathname, items }),
     [],
   )
-  // Task 9 replaces this with a real UploadDialog rendered by the layout.
-  const openUpload = useCallback(() => {
-    const folderId = location.pathname === '/all-files' ? new URLSearchParams(location.search).get('folderId') : null
-    navigate(folderId ? `/all-files?folderId=${encodeURIComponent(folderId)}&upload=1` : '/all-files?upload=1')
-  }, [navigate, location.pathname, location.search])
+  const [uploadTarget, setUploadTarget] = useState<{ open: boolean; folderId: string | null }>({ open: false, folderId: null })
+  const openUpload = useCallback(
+    (folderId?: string | null) => {
+      const target = folderId !== undefined ? folderId : location.pathname === '/all-files' ? new URLSearchParams(location.search).get('folderId') : null
+      setUploadTarget({ open: true, folderId: target })
+    },
+    [location.pathname, location.search],
+  )
 
   const breadcrumb =
     custom && custom.path === location.pathname
@@ -125,6 +129,7 @@ export function DriveLayout() {
         </main>
       </div>
 
+      <UploadDialog open={uploadTarget.open} folderId={uploadTarget.folderId} onClose={() => setUploadTarget((current) => ({ ...current, open: false }))} />
       <UploadPanel />
     </div>
   )
