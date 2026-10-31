@@ -191,6 +191,8 @@ export function AllFilesPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [files, setFiles] = useState<FileItem[]>([])
   const [filesLoaded, setFilesLoaded] = useState(false)
+  // fileId -> expiresAt (null = never) for files with an active public link
+  const [shareLinks, setShareLinks] = useState<Map<string, string | null>>(new Map())
   const [folders, setFolders] = useState<FolderItem[]>([])
   const [allFolders, setAllFolders] = useState<FolderItem[]>([])
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
@@ -268,8 +270,17 @@ export function AllFilesPage() {
     setAllFolders(allData.folders.map(mapFolder))
   }
 
+  async function loadShares() {
+    try {
+      const data = await apiFetch<{ shares: { expiresAt: string | null; file: { id: string } }[] }>('/files/shared-links')
+      setShareLinks(new Map(data.shares.map((share) => [share.file.id, share.expiresAt])))
+    } catch {
+      // Sharing info is optional; the panel falls back to "Private"
+    }
+  }
+
   async function loadAll() {
-    await Promise.all([loadFiles(), loadFolders()])
+    await Promise.all([loadFiles(), loadFolders(), loadShares()])
   }
 
   async function handleDropItem(fileId: string, targetFolderId: string) {
@@ -524,7 +535,7 @@ export function AllFilesPage() {
   const startDateParam = searchParams.get('startDate')
   const modifiedValue = (() => {
     if (!startDateParam) return null
-    const days = Math.round((Date.now() - new Date(startDateParam).getTime()) / 86_400_000)
+    const days = Math.floor((Date.now() - new Date(startDateParam).getTime()) / 86_400_000)
     return modifiedOptions.find((option) => Number(option.value) === days)?.value ?? 'custom'
   })()
 
@@ -631,6 +642,7 @@ export function AllFilesPage() {
     if (!activeFile?.id) return
     const data = await apiFetch<{ url: string }>(`/files/${activeFile.id}/share`, { method: 'POST' })
     setShareUrl(data.url)
+    loadShares().catch(() => undefined)
     setCopiedShareLink(false)
     setShareOpen(true)
   }
@@ -640,6 +652,7 @@ export function AllFilesPage() {
     try {
       const shareData = await apiFetch<{ url: string }>(`/files/${file.id}/share`, { method: 'POST' })
       await navigator.clipboard.writeText(shareData.url)
+      loadShares().catch(() => undefined)
       flash('Share link copied to clipboard.', 2500)
     } catch (err) {
       flash(`Failed to copy link: ${err instanceof Error ? err.message : String(err)}`, 4000)
@@ -779,6 +792,11 @@ export function AllFilesPage() {
   const allVisibleSelected = files.length > 0 && files.every((file) => file.id && selectedFileIds.has(file.id))
   const activePreviewKind = getPreviewKind(activeFile?.mimeType)
   const detailsFile = files.find((file) => file.id === detailsFileId) ?? null
+  const detailsSharing = (() => {
+    if (!detailsFile?.id || !shareLinks.has(detailsFile.id)) return 'Private'
+    const expires = shareLinks.get(detailsFile.id)
+    return expires ? `Public link · expires ${new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(expires))}` : 'Public link'
+  })()
   const searching = Boolean(searchQuery) || hasFilters
   const showFolders = !searching && folders.length > 0
 
@@ -895,6 +913,7 @@ export function AllFilesPage() {
             <DetailsPanel
               file={detailsFile}
               folderName={detailsFile.folderName}
+              sharing={detailsSharing}
               onClose={() => setDetailsFileId(null)}
               onCopyLink={() => copyShareLinkFor(detailsFile)}
               onDownload={() => downloadFile(detailsFile)}
@@ -938,6 +957,7 @@ export function AllFilesPage() {
               embedded
               file={detailsFile}
               folderName={detailsFile.folderName}
+              sharing={detailsSharing}
               onCopyLink={() => copyShareLinkFor(detailsFile)}
               onDownload={() => downloadFile(detailsFile)}
               onMakeDrivePublic={() => makeDrivePublic(detailsFile)}

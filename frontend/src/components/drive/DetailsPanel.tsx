@@ -28,6 +28,7 @@ function Truncated({ text }: { text: string }) {
 export function DetailsPanel({
   file,
   folderName,
+  sharing,
   onClose,
   onCopyLink,
   onDownload,
@@ -36,6 +37,7 @@ export function DetailsPanel({
 }: {
   file: FileItem
   folderName?: string | null
+  sharing?: string
   onClose?: () => void
   onCopyLink: () => void | Promise<void>
   onDownload: () => void | Promise<void>
@@ -83,6 +85,7 @@ export function DetailsPanel({
         <InfoRow label="Account"><Truncated text={file.accountEmail ?? '--'} /></InfoRow>
         <InfoRow label="Folder"><Truncated text={folderName || 'All files'} /></InfoRow>
         <InfoRow label="Modified"><span className="tabular-nums"><Truncated text={file.date} /></span></InfoRow>
+        {sharing ? <InfoRow label="Sharing"><Truncated text={sharing} /></InfoRow> : null}
       </dl>
       <div className="grid gap-2">
         <Button variant="primary" className="w-full" onClick={copy}>{copied ? 'Link copied' : 'Copy share link'}</Button>
