@@ -233,7 +233,7 @@ Uploads:
 - File fields then match `filesMeta[*].fieldName`, e.g. `file-0`, `file-1`.
 - Backend selects a connected Drive account with enough available quota and streams each file directly to Google Drive.
 - Google Drive uploads are placed under the root Drive folder named `9drive`; virtual folders remain app/database-only.
-- `POST /files/sync-google` treats Google Drive folder `9drive` as source of truth for physical files: create missing MySQL file rows, update changed metadata, and mark missing Drive files as deleted.
+- `POST /files/sync-google` imports each connected account's whole My Drive: the `9drive` folder is the app root, everything else appears under a per-account `Drive · email` folder. It creates missing MySQL rows, updates changed metadata/placement, and marks missing Drive files as deleted. See CLAUDE.md "Google Drive import".
 
 ## Docker
 

@@ -51,7 +51,7 @@ export function RecentPage() {
     setLoading(true)
     setError('')
     try {
-      const data = await apiFetch<{ files: RecentFile[] }>('/files')
+      const data = await apiFetch<{ files: RecentFile[] }>('/files?limit=300')
       setFiles(data.files)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load recent files')

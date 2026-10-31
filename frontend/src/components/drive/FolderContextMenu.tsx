@@ -25,6 +25,7 @@ export function FolderContextMenu({
   onCopyLink: () => void
   onDelete: () => void
 }) {
+  const locked = folder?.source === 'drive_root'
   const run = (fn: () => void) => () => {
     onClose()
     fn()
@@ -35,11 +36,16 @@ export function FolderContextMenu({
         <>
           <div className="max-w-[260px] truncate px-2 pb-1.5 pt-1 text-[11px] text-subtle" title={folder.name}>{folder.name}</div>
           <MenuItem icon={<Copy {...icon} />} onSelect={run(onCopyLink)}>Copy link</MenuItem>
-          <MenuItem icon={<Scissors {...icon} />} shortcut="Ctrl X" onSelect={run(onCut)}>Cut</MenuItem>
-          <MenuItem icon={<Pencil {...icon} />} onSelect={run(onRename)}>Rename</MenuItem>
+          {/* The folder standing for a connected Drive account can't be moved, renamed or deleted. */}
+          {locked ? null : <MenuItem icon={<Scissors {...icon} />} shortcut="Ctrl X" onSelect={run(onCut)}>Cut</MenuItem>}
+          {locked ? null : <MenuItem icon={<Pencil {...icon} />} onSelect={run(onRename)}>Rename</MenuItem>}
           <MenuItem icon={<UserPlus {...icon} />} onSelect={run(onInvite)}>Invite member</MenuItem>
-          <MenuSeparator />
-          <MenuItem icon={<Trash2 {...icon} />} danger onSelect={run(onDelete)}>Delete folder</MenuItem>
+          {locked ? null : (
+            <>
+              <MenuSeparator />
+              <MenuItem icon={<Trash2 {...icon} />} danger onSelect={run(onDelete)}>Delete folder</MenuItem>
+            </>
+          )}
         </>
       ) : null}
     </Menu>

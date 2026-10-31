@@ -278,6 +278,9 @@ model Folder {
   connectedAccountId String?           @map("connected_account_id") @db.Char(36)
   provider           String            @default("google_drive") @db.VarChar(32)
   providerFolderId   String?           @map("provider_folder_id") @db.VarChar(191)
+  // app: created in 9drive (Drive mirror under the 9drive folder). drive: imported from a
+  // connected account's My Drive. drive_root: the per-account folder standing for My Drive.
+  source             String            @default("app") @db.VarChar(16)
   name               String            @db.VarChar(255)
   color              String            @default("text-blue-500") @db.VarChar(64)
   iconUrl            String?           @map("icon_url") @db.Text
@@ -292,6 +295,7 @@ model Folder {
   uploadSessions     UploadSession[]    @relation("UploadSessionFolder")
 
   @@index([userId])
+  @@index([connectedAccountId, providerFolderId])
   @@index([userId, deletedAt, updatedAt])
   @@index([userId, deletedAt, parentId, updatedAt])
   @@index([parentId])

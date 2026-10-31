@@ -1,6 +1,7 @@
 import type { Auth } from 'googleapis'
 import type { OauthState, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
+import { syncGoogleDriveInBackground } from '../google/drive-sync.js'
 import { accountLabel } from '../../utils/account-label.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
@@ -71,6 +72,7 @@ export async function completeGoogleLogin(oauthState: OauthState & { providerCon
   if (!existingAccount || existingAccount.status !== 'connected') await createAuditLog(user.id, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
   await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
   await syncGoogleQuota(account.id).catch(() => undefined)
+  syncGoogleDriveInBackground(account.id, user.id)
 
   const handoffToken = randomToken()
   await prisma.authHandoff.create({ data: { userId: user.id, tokenHash: hashToken(handoffToken), expiresAt: new Date(Date.now() + 5 * 60_000) } })

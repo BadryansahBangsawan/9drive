@@ -1,10 +1,13 @@
 import { app } from './app.js'
 import { env } from './config/env.js'
 import { encryptLegacyShareTokens } from './modules/files/share-token.js'
+import { startDriveSyncScheduler } from './modules/google/drive-sync.js'
 
 app.listen(env.APP_PORT, () => {
   console.log(`Backend running on http://localhost:${env.APP_PORT}`)
 })
+
+startDriveSyncScheduler()
 
 encryptLegacyShareTokens()
   .then((count) => {

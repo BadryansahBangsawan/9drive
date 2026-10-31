@@ -6,7 +6,8 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { hashToken, randomToken } from '../../utils/crypto.js'
 import { shareExpiresAt } from '../../utils/share-expiry.js'
 import type { ConnectedAccount, File, Folder } from '@prisma/client'
-import { ensureGoogleAppFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleAppFolderFiles, syncGoogleQuota } from '../google/google.service.js'
+import { ensureGoogleAppFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleQuota } from '../google/google.service.js'
+import { syncGoogleDrive } from '../google/drive-sync.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile } from './stream-file.js'
 import { newShareToken, readShareToken, shareUrl } from './share-token.js'
@@ -39,8 +40,10 @@ fileRouter.use(requireAuth)
 fileRouter.get('/', async (req: AuthRequest, res, next) => {
   try {
     const query = z.object({
+      // 'root' lists only files at the top level; omitted lists files in every folder.
       folderId: z.string().optional(),
       q: z.string().trim().max(255).optional(),
+      limit: z.coerce.number().int().min(1).max(1000).optional(),
       kind: z.enum(['image', 'video', 'pdf', 'doc', 'archive']).optional(),
       accountId: z.string().optional(),
       minSize: z.coerce.number().int().nonnegative().optional(),
@@ -60,7 +63,7 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
     const where: any = {
       userId: req.user!.id,
       status: 'active',
-      ...(query.folderId ? { folderId: query.folderId } : {}),
+      ...(query.folderId ? { folderId: query.folderId === 'root' ? null : query.folderId } : {}),
       ...(query.q ? { name: { contains: query.q } } : {}),
       ...(query.accountId ? { connectedAccountId: query.accountId } : {}),
       ...(query.kind ? { mimeType: { in: typeFilters[query.kind] || [] } } : {}),
@@ -84,7 +87,8 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
         connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } },
         folder: { select: { id: true, name: true } }
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      ...(query.limit ? { take: query.limit } : {}),
     })
     return res.json({ files: files.map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString() })) })
   } catch (error) {
@@ -283,13 +287,15 @@ fileRouter.post('/sync-google', async (req: AuthRequest, res, next) => {
       select: { id: true },
     })
 
-    const results = []
-    for (const account of accounts) results.push(await syncGoogleAppFolderFiles(account.id, req.user!.id))
-
-    return res.json({
-      status: 'ok',
-      results,
-    })
+    // A large Drive can take longer than a proxy will hold the request open (Cloudflare: ~100 s),
+    // so answer 202 if it isn't done soon; the sync keeps running and the files appear when it ends.
+    const work = Promise.all(accounts.map((account) => syncGoogleDrive(account.id, req.user!.id)
+      .catch((error) => ({ accountId: account.id, created: 0, updated: 0, deleted: 0, error: error instanceof Error ? error.message : 'Sync failed' }))))
+    let timer: NodeJS.Timeout | undefined
+    const results = await Promise.race([work, new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 45_000) })])
+    clearTimeout(timer)
+    if (!results) return res.status(202).json({ status: 'running', results: [] })
+    return res.json({ status: 'ok', results })
   } catch (error) {
     return next(error)
   }

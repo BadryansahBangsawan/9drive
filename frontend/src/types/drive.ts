@@ -6,6 +6,8 @@ export type FolderItem = {
   iconUrl?: string | null
   parentId?: string | null
   providerFolderId?: string | null
+  // 'drive_root' is the per-account folder standing for a connected Drive's My Drive.
+  source?: string
 }
 
 export type FileItem = {

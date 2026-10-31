@@ -3,6 +3,7 @@ import { google } from 'googleapis'
 import { z } from 'zod'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
+import { syncGoogleDriveInBackground } from '../google/drive-sync.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { accountLabel } from '../../utils/account-label.js'
@@ -233,6 +234,7 @@ connectedAccountRouter.get('/google/callback', async (req, res, next) => {
       },
     })
     await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date() } })
+    syncGoogleDriveInBackground(account.id, account.userId)
     await createAuditLog(oauthState.userId, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
     await syncGoogleQuota(account.id)
     return res.redirect(`${env.FRONTEND_URL}/google-connected?status=success`)

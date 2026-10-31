@@ -27,7 +27,7 @@ import type { FileItem, FolderItem } from '@/types/drive'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 
 type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccount?: { id: string; email: string; provider: string; displayName?: string | null }; folder?: { id: string; name: string } | null }
-type BackendFolder = { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; updatedAt: string }
+type BackendFolder = { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; source?: string; updatedAt: string }
 
 type FileViewMode = 'list' | 'grid'
 
@@ -87,7 +87,7 @@ function mapFile(file: BackendFile): FileItem {
 }
 
 function mapFolder(folder: BackendFolder): FolderItem {
-  return { id: folder.id, name: folder.name, color: folder.color, iconUrl: folder.iconUrl, parentId: folder.parentId, providerFolderId: folder.providerFolderId, updated: `Updated ${formatDate(folder.updatedAt)}` }
+  return { id: folder.id, name: folder.name, color: folder.color, iconUrl: folder.iconUrl, parentId: folder.parentId, providerFolderId: folder.providerFolderId, source: folder.source, updated: `Updated ${formatDate(folder.updatedAt)}` }
 }
 
 function useMediaQuery(query: string) {
@@ -230,7 +230,9 @@ export function AllFilesPage() {
 
   async function loadFiles() {
     const params = new URLSearchParams()
+    // The top level shows only its own files; search and filters still cover every folder.
     if (activeFolderId) params.set('folderId', activeFolderId)
+    else if (!searchQuery && !hasFilters) params.set('folderId', 'root')
     if (searchQuery) params.set('q', searchQuery)
     for (const key of filterParams) {
       const value = searchParams.get(key)
@@ -353,7 +355,11 @@ export function AllFilesPage() {
     setSyncingDrive(true)
     setMessage('')
     try {
-      const response = await apiFetch<{ results: { created: number; updated: number; deleted: number }[] }>('/files/sync-google', { method: 'POST', body: JSON.stringify({}) })
+      const response = await apiFetch<{ status: string; results: { created: number; updated: number; deleted: number; error?: string }[] }>('/files/sync-google', { method: 'POST', body: JSON.stringify({}) })
+      if (response.status === 'running') {
+        flash('Syncing a large Drive in the background. Files will appear in a few minutes.', 8000)
+        return
+      }
 
       let created = 0, updated = 0, deleted = 0
       for (const res of response.results) {
@@ -362,8 +368,9 @@ export function AllFilesPage() {
         deleted += res.deleted
       }
       const accounts = response.results.length
+      const failed = response.results.filter((res) => res.error).length
 
-      flash(`Google Drive synced. ${created} added, ${updated} updated, ${deleted} removed across ${accounts} account${accounts === 1 ? '' : 's'}.`, 6000)
+      flash(`Google Drive synced. ${created} added, ${updated} updated, ${deleted} removed across ${accounts} account${accounts === 1 ? '' : 's'}.${failed ? ` ${failed} account${failed === 1 ? '' : 's'} failed to sync.` : ''}`, 6000)
       await loadAll()
       window.dispatchEvent(new Event('9drive:storage-changed'))
     } catch (error) {
@@ -649,27 +656,46 @@ export function AllFilesPage() {
   async function renameFolder(event: FormEvent) {
     event.preventDefault()
     if (!activeFolderForMenu?.id) return
-    await apiFetch(`/folders/${activeFolderForMenu.id}`, { method: 'PATCH', body: JSON.stringify({ name: folderRenameValue, iconUrl: folderRenameIconUrl }) })
+    try {
+      await apiFetch(`/folders/${activeFolderForMenu.id}`, { method: 'PATCH', body: JSON.stringify({ name: folderRenameValue, iconUrl: folderRenameIconUrl }) })
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to rename folder', 5000)
+      return
+    }
     setFolderRenameOpen(false)
     await loadFolders()
   }
 
   async function deleteFolder() {
     if (!activeFolderForMenu?.id) return
-    await apiFetch(`/folders/${activeFolderForMenu.id}`, { method: 'DELETE' })
+    try {
+      await apiFetch(`/folders/${activeFolderForMenu.id}`, { method: 'DELETE' })
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to delete folder', 5000)
+      return
+    }
     setFolderDeleteOpen(false)
     await loadFolders()
   }
 
   function cutSelectedFolder(folder: FolderItem | null) {
     if (!folder?.id) return
+    if (folder.source === 'drive_root') {
+      flash('This folder stands for a connected Drive account and can’t be moved.', 4000)
+      return
+    }
     setCutFolder(folder)
     setMessage(`Folder "${folder.name}" ready to move. Open target folder and press Ctrl+V.`)
   }
 
   async function pasteFolder() {
     if (!cutFolder?.id) return
-    await apiFetch(`/folders/${cutFolder.id}`, { method: 'PATCH', body: JSON.stringify({ parentId: activeFolderId ?? null }) })
+    try {
+      await apiFetch(`/folders/${cutFolder.id}`, { method: 'PATCH', body: JSON.stringify({ parentId: activeFolderId ?? null }) })
+    } catch (error) {
+      flash(error instanceof Error ? error.message : 'Failed to move folder', 5000)
+      return
+    }
     flash(`Folder "${cutFolder.name}" moved.`)
     setCutFolder(null)
     await loadFolders()
