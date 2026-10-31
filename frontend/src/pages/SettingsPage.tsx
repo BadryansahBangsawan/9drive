@@ -1,15 +1,48 @@
-import { useEffect, useState, useRef, type FormEvent } from 'react'
-import { Bell, Cloud, Globe, RefreshCw } from 'lucide-react'
+import { useEffect, useState, useRef, type FormEvent, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { LogOut, RefreshCw } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Segmented } from '@/components/ui/segmented'
 import { PageHeader } from '@/components/drive/PageHeader'
+import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 import { apiFetch } from '@/lib/api'
+import { clearAuthSession, getStoredUser } from '@/lib/auth'
 import { getGravatarUrl } from '@/lib/gravatar'
-import { getStoredUser } from '@/lib/auth'
+import { getThemePreference, setThemePreference, type ThemePreference } from '@/lib/theme'
+
+function Section({ title, badge, description, children }: { title: string; badge?: ReactNode; description?: string; children: ReactNode }) {
+  return (
+    <section className="grid gap-4 border-t border-border py-6 first:border-t-0 md:grid-cols-[240px_minmax(0,1fr)] md:gap-8">
+      <div>
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-text">{title}</h2>
+          {badge}
+        </div>
+        {description ? <p className="mt-1 text-[13px] text-muted">{description}</p> : null}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </section>
+  )
+}
+
+function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <label className="grid gap-1.5 text-[13px] font-medium text-text">
+      {label}
+      {children}
+      {hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}
+    </label>
+  )
+}
 
 export function SettingsPage() {
   const user = getStoredUser()
+  const navigate = useNavigate()
+  const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
+  const [themePref, setThemePref] = useState<ThemePreference>(getThemePreference)
   const isAdmin = user?.role === 'admin'
   const [message, setMessage] = useState('')
   const [profileImageUrl, setProfileImageUrl] = useState('')
@@ -25,7 +58,6 @@ export function SettingsPage() {
   const [defaultRedirectUri, setDefaultRedirectUri] = useState('')
   const [hasSecret, setHasSecret] = useState(false)
   const [savingGoogleConfig, setSavingGoogleConfig] = useState(false)
-  const [showGoogleHelp, setShowGoogleHelp] = useState(false)
 
   // Live log polling states
   const [isPollingLog, setIsPollingLog] = useState(false)
@@ -110,7 +142,7 @@ export function SettingsPage() {
         body: JSON.stringify({
           clientId: googleClientId,
           clientSecret: googleClientSecret || undefined,
-          redirectUri: googleRedirectUri || defaultRedirectUri,
+          redirectUri: googleRedirectUri || undefined,
         }),
       })
       setMessage(res.message || 'Google OAuth credentials saved.')
@@ -143,200 +175,130 @@ export function SettingsPage() {
   }, [isAdmin])
 
   useEffect(() => {
+    setBreadcrumb([{ label: 'Settings' }])
+    setHeaderActions(null)
+  }, [])
+
+  useEffect(() => {
     setAvatarError(false)
     getGravatarUrl(user?.email, 96).then(setProfileImageUrl).catch(() => setProfileImageUrl(''))
   }, [user?.email])
 
+  async function logout() {
+    await apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined)
+    clearAuthSession()
+    navigate('/login')
+  }
+
+  function closeUpdateDialog() {
+    if (!updateFinished && !confirm('The update is still running in the background. Close log viewer?')) return
+    setUpdateModalOpen(false)
+    setIsPollingLog(false)
+    if (updateFinished && updateSuccess) window.location.reload()
+  }
+
+  const initial = (user?.name ?? user?.email ?? 'U').trim().charAt(0).toUpperCase()
+
   return (
     <>
-      <PageHeader title="Setting" description="Manage account and connected storage."  />
-      {message ? <p className="mt-4 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
-      <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_280px]">
-        <div className="grid gap-4">
-          <Card className="p-4">
-            <div className="flex items-center gap-3.5">
-              {!profileImageUrl || avatarError ? (
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-lg font-bold text-white shadow-sm border border-blue-400/20 sm:h-14 sm:w-14">
-                  {(user?.name ?? user?.email ?? 'U').trim().charAt(0).toUpperCase()}
-                </div>
+      <PageHeader title="Settings" description="Manage your account, appearance and system." />
+      <div className="mt-4 max-w-[800px]">
+        {message ? <p role="status" className="mb-4 rounded-lg bg-accent-soft px-3 py-2 text-[13px] text-text">{message}</p> : null}
+
+        <Section title="Profile">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-selected text-lg font-semibold text-text">
+              {profileImageUrl && !avatarError ? (
+                <img src={profileImageUrl} alt="" className="h-full w-full object-cover" onError={() => setAvatarError(true)} />
               ) : (
-                <img
-                  src={profileImageUrl}
-                  alt="User avatar"
-                  className="h-12 w-12 rounded-xl object-cover sm:h-14 sm:w-14"
-                  onError={() => setAvatarError(true)}
-                />
+                initial
               )}
-              <div className="flex-1"><h2 className="text-lg font-bold">{user?.name ?? 'User'}</h2><p className="text-xs text-slate-500 mt-0.5">{user?.email ?? '-'}</p></div>
             </div>
-          </Card>
-
-          {isAdmin ? <>
-          <Card className="p-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">
-              <div className="flex items-center gap-2.5">
-                <Cloud className="h-5 w-5 text-blue-600" />
-                <h2 className="text-[17px] font-bold">Google OAuth Credentials</h2>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs font-semibold"
-                type="button"
-                onClick={() => setShowGoogleHelp(!showGoogleHelp)}
-              >
-                {showGoogleHelp ? 'Hide Guide' : 'Setup Guide'}
-              </Button>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-text">{user?.name ?? 'User'}</p>
+              <p className="truncate text-[13px] text-muted">{user?.email ?? '-'}{user?.role ? ` · ${user.role === 'admin' ? 'Admin' : 'User'}` : ''}</p>
             </div>
+            <Button variant="secondary" onClick={logout}><LogOut className="h-4 w-4" strokeWidth={1.5} />Sign out</Button>
+          </div>
+        </Section>
 
-            {showGoogleHelp && (
-              <div className="mb-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 p-3.5 text-[13px] leading-relaxed text-slate-600 border border-slate-100 dark:border-slate-800">
-                <p className="font-bold text-slate-800 dark:text-slate-200 mb-1.5">How to setup Google credentials:</p>
-                <ol className="list-decimal pl-4 space-y-1.5">
-                  <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Google Cloud Console</a>.</li>
-                  <li>Enable the <strong>Google Drive API</strong> in your project.</li>
-                  <li>Go to <strong>APIs & Services &gt; Credentials</strong>, click <strong>Create Credentials &gt; OAuth client ID</strong>.</li>
-                  <li>Set application type to <strong>Web application</strong>.</li>
-                  <li>Add this exact URL under <strong>Authorized redirect URIs</strong>:
-                    <div className="mt-1 flex items-center gap-1.5 font-mono text-[11px] bg-white dark:bg-slate-950 p-1.5 rounded border border-slate-200 dark:border-slate-800 select-all overflow-x-auto">
-                      {googleRedirectUri || defaultRedirectUri}
-                    </div>
-                  </li>
-                  <li>Copy the generated <strong>Client ID</strong> and <strong>Client Secret</strong> into the form below and save.</li>
-                </ol>
-              </div>
-            )}
+        <Section title="Appearance" description="Choose how 9Drive looks.">
+          <Segmented<ThemePreference>
+            value={themePref}
+            onChange={(next) => { setThemePref(next); setThemePreference(next) }}
+            options={[
+              { value: 'light', label: 'Light' },
+              { value: 'dark', label: 'Dark' },
+              { value: 'system', label: 'System' },
+            ]}
+          />
+        </Section>
 
-            <form onSubmit={saveGoogleConfig} className="grid gap-3.5">
-              <label className="grid gap-1.5 text-xs font-bold text-slate-500">
-                Client ID
-                <input
-                  className="h-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 text-sm focus:border-blue-600 focus:outline-none"
-                  placeholder="Enter Google Client ID"
-                  value={googleClientId}
-                  onChange={(e) => setGoogleClientId(e.target.value)}
-                  required
-                />
-              </label>
-
-              <label className="grid gap-1.5 text-xs font-bold text-slate-500">
-                Client Secret {hasSecret && <span className="font-normal text-emerald-600">(Already Configured)</span>}
-                <input
-                  className="h-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 text-sm focus:border-blue-600 focus:outline-none"
-                  type="password"
-                  placeholder={hasSecret ? "••••••••••••••••••••••••" : "Enter Google Client Secret"}
-                  value={googleClientSecret}
-                  onChange={(e) => setGoogleClientSecret(e.target.value)}
-                  required={!hasSecret}
-                />
-              </label>
-
-              <label className="grid gap-1.5 text-xs font-bold text-slate-500">
-                Redirect URI (Optional)
-                <input
-                  className="h-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 text-sm focus:border-blue-600 focus:outline-none"
-                  placeholder={defaultRedirectUri}
-                  value={googleRedirectUri}
-                  onChange={(e) => setGoogleRedirectUri(e.target.value)}
-                />
-              </label>
-
-              <div className="flex justify-end mt-1">
-                <Button type="submit" disabled={savingGoogleConfig} size="sm">
-                  {savingGoogleConfig ? 'Saving...' : 'Save Credentials'}
-                </Button>
-              </div>
-            </form>
-          </Card>
-
-          <Card className="overflow-hidden p-3.5">
-            <div className="flex flex-col gap-3.5 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="flex items-center gap-2.5">
-                  <RefreshCw className="h-5 w-5 text-blue-600" />
-                  <h2 className="text-[16px] font-bold">System Update</h2>
+        {isAdmin ? (
+          <>
+            <Section title="Google sign-in" badge={<Badge>Admin</Badge>} description="OAuth credentials used for Google sign-in and Drive.">
+              <form onSubmit={saveGoogleConfig} className="grid gap-4">
+                <Field label="Client ID">
+                  <Input placeholder="Google client ID" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} required />
+                </Field>
+                <Field label="Client secret">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    placeholder={hasSecret ? 'Saved. Leave blank to keep it' : 'Google client secret'}
+                    value={googleClientSecret}
+                    onChange={(e) => setGoogleClientSecret(e.target.value)}
+                    required={!hasSecret}
+                  />
+                </Field>
+                <Field
+                  label="Redirect URI"
+                  hint={<>Leave blank to use the default. Add this exact URL under Authorized redirect URIs in <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Google Cloud Console</a>.</>}
+                >
+                  <Input placeholder={defaultRedirectUri} value={googleRedirectUri} onChange={(e) => setGoogleRedirectUri(e.target.value)} />
+                </Field>
+                <div>
+                  <Button type="submit" disabled={savingGoogleConfig}>{savingGoogleConfig ? 'Saving...' : 'Save'}</Button>
                 </div>
-                <p className="mt-1 text-[13px] text-slate-500">
-                  Pull the latest code from GitHub. Dev servers will automatically restart.
-                </p>
-              </div>
-              <Button
-                className="w-full sm:w-32"
-                variant="outline"
-                size="sm"
-                onClick={runSystemUpdate}
-                disabled={updatingSystem}
-              >
-                <RefreshCw className={updatingSystem ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
-                {updatingSystem ? 'Updating...' : 'Update Code'}
-              </Button>
-            </div>
-          </Card>
-          </> : null}
+              </form>
+            </Section>
 
-        </div>
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 lg:gap-3">
-          <Card className="p-4"><Bell className="h-5 w-5 text-blue-600" /><h2 className="mt-2 text-[14px] font-bold">Notifications</h2><p className="mt-1 text-[12px] text-slate-500">Email and app alerts are active.</p></Card>
-          <Card className="p-4"><Globe className="h-5 w-5 text-blue-600" /><h2 className="mt-2 text-[14px] font-bold">Region</h2><p className="mt-1 text-[12px] text-slate-500">Workspace region: local gateway.</p></Card>
-        </div>
+            <Section title="System update" badge={<Badge>Admin</Badge>} description="Pull the latest code from GitHub. Dev servers restart automatically.">
+              <Button variant="secondary" onClick={runSystemUpdate} disabled={updatingSystem}>
+                <RefreshCw className={updatingSystem ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} strokeWidth={1.5} />
+                {updatingSystem ? 'Updating...' : 'Update now'}
+              </Button>
+            </Section>
+          </>
+        ) : null}
       </div>
+
       <Dialog
         open={updateModalOpen}
         title={updateModalTitle}
         width={672}
-        onClose={() => {
-          if (!updateFinished) {
-            if (!confirm('The update is still running in the background. Close log viewer?')) {
-              return
-            }
-          }
-          setUpdateModalOpen(false)
-          setIsPollingLog(false)
-          if (updateFinished && updateSuccess) {
-            window.location.reload()
-          }
-        }}
+        onClose={closeUpdateDialog}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeUpdateDialog}>Close</Button>
+            {updateFinished && updateSuccess ? <Button onClick={() => window.location.reload()}>Reload page</Button> : null}
+          </>
+        }
       >
         <p className="mb-3 text-[13px] text-muted">{updateFinished ? (updateSuccess ? 'System updated successfully' : 'Update failed') : 'Live installation logs'}</p>
-        <div className="grid gap-4">
-          <div
-            ref={logContainerRef}
-            className="relative rounded-xl bg-slate-950 p-4 font-mono text-xs text-slate-300 leading-relaxed border border-slate-800 h-80 overflow-y-auto select-text"
-          >
-            <pre className="whitespace-pre-wrap">{updateLog}</pre>
-            {!updateFinished && (
-              <div className="mt-3 flex items-center gap-2 text-blue-400">
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                <span>
-                  {reconnectCount > 0
-                    ? `Rebooting server and reconnecting... (attempt ${reconnectCount})`
-                    : 'Installing updates...'}
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (!updateFinished) {
-                  if (!confirm('The update is still running. Close log viewer?')) return
-                }
-                setUpdateModalOpen(false)
-                setIsPollingLog(false)
-                if (updateFinished && updateSuccess) {
-                  window.location.reload()
-                }
-              }}
-            >
-              Close
-            </Button>
-            {updateFinished && updateSuccess && (
-              <Button onClick={() => window.location.reload()}>
-                Reload Page
-              </Button>
-            )}
-          </div>
+        <div
+          ref={logContainerRef}
+          className="h-80 select-text overflow-y-auto rounded-lg border border-border bg-surface p-3 font-mono text-xs leading-relaxed text-text"
+        >
+          <pre className="whitespace-pre-wrap">{updateLog}</pre>
+          {!updateFinished && (
+            <div className="mt-3 flex items-center gap-2 text-muted">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+              <span>
+                {reconnectCount > 0 ? `Rebooting server and reconnecting... (attempt ${reconnectCount})` : 'Installing updates...'}
+              </span>
+            </div>
+          )}
         </div>
       </Dialog>
     </>

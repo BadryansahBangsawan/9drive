@@ -1,9 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { CheckCircle, Clipboard, KeyRound, ShieldCheck, Trash2, UploadCloud } from 'lucide-react'
+import { Check, Copy, KeyRound, Plus } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/drive/PageHeader'
+import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 import { API_URL, apiFetch, formatDate } from '@/lib/api'
 
 type ApiKey = { id: string; name: string; keyPrefix: string; scopes: string[]; status: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null; createdAt: string }
@@ -13,32 +16,27 @@ const curlExample = `curl -X POST "${API_URL}/api/v1/uploads" \\
   -F 'filesMeta=[{"fieldName":"file-0","fileName":"hello.txt","mimeType":"text/plain","sizeBytes":"12"}]' \\
   -F "file-0=@hello.txt;type=text/plain"`
 
-const jsExample = `const form = new FormData()
-form.append('filesMeta', JSON.stringify([
-  { fieldName: 'file-0', fileName: file.name, mimeType: file.type, sizeBytes: String(file.size) },
-]))
-form.append('file-0', file)
-
-await fetch('${API_URL}/api/v1/uploads', {
-  method: 'POST',
-  headers: { Authorization: 'Bearer 9d_live_xxx' },
-  body: form,
-})`
-
 export function ApiManagementPage() {
+  const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [keyName, setKeyName] = useState('')
+  const [expiry, setExpiry] = useState('')
   const [secret, setSecret] = useState('')
   const [message, setMessage] = useState('')
+  const [copied, setCopied] = useState('')
   const [loading, setLoading] = useState(false)
 
   async function load() {
     const data = await apiFetch<{ apiKeys: ApiKey[] }>('/api-keys')
     setApiKeys(data.apiKeys)
+    setLoaded(true)
   }
 
   useEffect(() => {
+    setBreadcrumb([{ label: 'API keys' }])
+    setHeaderActions(null)
     load().catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to load API keys'))
   }, [])
 
@@ -47,9 +45,11 @@ export function ApiManagementPage() {
     setLoading(true)
     setMessage('')
     try {
-      const data = await apiFetch<{ apiKey: ApiKey; secret: string }>('/api-keys', { method: 'POST', body: JSON.stringify({ name: keyName }) })
+      const expiresAt = expiry ? new Date(`${expiry}T23:59:59`).toISOString() : null
+      const data = await apiFetch<{ apiKey: ApiKey; secret: string }>('/api-keys', { method: 'POST', body: JSON.stringify({ name: keyName, expiresAt }) })
       setSecret(data.secret)
       setKeyName('')
+      setExpiry('')
       setCreateOpen(false)
       await load()
     } catch (error) {
@@ -60,56 +60,121 @@ export function ApiManagementPage() {
   }
 
   async function revokeKey(id: string) {
-    await apiFetch(`/api-keys/${id}`, { method: 'DELETE' })
-    await load()
+    try {
+      await apiFetch(`/api-keys/${id}`, { method: 'DELETE' })
+      await load()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to revoke API key')
+    }
   }
 
-  function copy(value: string) {
-    navigator.clipboard.writeText(value).then(() => setMessage('Copied to clipboard.')).catch(() => setMessage('Failed to copy.'))
+  function copy(id: string, value: string) {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(id)
+      setTimeout(() => setCopied((cur) => (cur === id ? '' : cur)), 1500)
+    }).catch(() => setMessage('Failed to copy.'))
   }
 
-  const activeKeys = apiKeys.filter((apiKey) => apiKey.status === 'active').length
-  const usedKeys = apiKeys.filter((apiKey) => apiKey.lastUsedAt).length
+  const CopyIcon = ({ id }: { id: string }) => (copied === id ? <Check className="h-4 w-4" strokeWidth={1.5} /> : <Copy className="h-4 w-4" strokeWidth={1.5} />)
+  const newKeyButton = <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" strokeWidth={1.5} />Create key</Button>
 
   return (
     <>
-      <PageHeader title="API Management" description="Create API keys, copy examples, and upload files from external apps." actions={<Button className="col-span-2 w-full sm:w-auto" onClick={() => setCreateOpen(true)}><KeyRound className="h-4 w-4" />Create API Key</Button>} />
-      {message ? <p className="mt-5 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
-      {secret ? <Card className="mt-5 min-w-0 overflow-hidden border-blue-200 bg-blue-50 p-0"><div className="grid min-w-0 gap-4 p-4 sm:p-5"><div className="flex min-w-0 items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white"><ShieldCheck className="h-5 w-5" /></div><div className="min-w-0"><p className="font-extrabold text-blue-950">Copy your API key now</p><p className="mt-1 text-sm text-blue-700">This secret is shown once. Store it securely before closing this page.</p></div></div><div className="grid min-w-0 gap-2 lg:grid-cols-[minmax(0,1fr)_auto]"><code className="block min-w-0 max-w-full overflow-x-auto rounded-xl bg-white p-3 text-xs font-semibold text-slate-950 sm:text-sm">{secret}</code><Button className="w-full lg:w-auto" type="button" onClick={() => copy(secret)}><Clipboard className="h-4 w-4" />Copy key</Button></div></div></Card> : null}
+      <PageHeader title="API keys" description="Keys can only upload files. Secrets are shown once and never stored." actions={newKeyButton} />
+      {message ? <p role="status" className="mt-4 rounded-lg bg-accent-soft px-3 py-2 text-[13px] text-text">{message}</p> : null}
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-3">
-        <Card className="p-4"><KeyRound className="h-5 w-5 text-blue-600" /><p className="mt-3 text-2xl font-extrabold">{activeKeys}</p><p className="text-sm text-slate-500">Active keys</p></Card>
-        <Card className="p-4"><CheckCircle className="h-5 w-5 text-emerald-600" /><p className="mt-3 text-2xl font-extrabold">{usedKeys}</p><p className="text-sm text-slate-500">Used keys</p></Card>
-        <Card className="p-4"><UploadCloud className="h-5 w-5 text-blue-600" /><p className="mt-3 text-2xl font-extrabold">1</p><p className="text-sm text-slate-500">Upload endpoint</p></Card>
+      {secret ? (
+        <div className="mt-4 rounded-[10px] border border-border bg-accent-soft p-4">
+          <p className="text-sm font-semibold text-text">Copy your new key</p>
+          <p className="mt-0.5 text-[13px] text-muted">This is the only time it is shown. Store it somewhere safe.</p>
+          <div className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row">
+            <code className="block min-w-0 flex-1 overflow-x-auto rounded-lg border border-border bg-bg px-3 py-2 font-mono text-[13px] text-text">{secret}</code>
+            <Button onClick={() => copy('secret', secret)}><CopyIcon id="secret" />{copied === 'secret' ? 'Copied' : 'Copy'}</Button>
+            <Button variant="ghost" onClick={() => setSecret('')}>Dismiss</Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 overflow-x-auto rounded-[10px] border border-border">
+        {loaded && apiKeys.length === 0 ? (
+          <EmptyState
+            icon={<KeyRound className="h-5 w-5" strokeWidth={1.5} />}
+            title="No API keys yet"
+            description="Create a key to upload files from scripts and other apps."
+            action={newKeyButton}
+          />
+        ) : (
+          <table className="w-full min-w-[640px] text-left text-[13px]">
+            <thead>
+              <tr className="border-b border-border text-xs font-medium text-muted">
+                <th className="px-4 py-2.5 font-medium">Name</th>
+                <th className="px-4 py-2.5 font-medium">Key prefix</th>
+                <th className="px-4 py-2.5 font-medium">Scope</th>
+                <th className="px-4 py-2.5 font-medium">Last used</th>
+                <th className="px-4 py-2.5 font-medium">Expires</th>
+                <th className="px-4 py-2.5"><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {apiKeys.map((apiKey) => (
+                <tr key={apiKey.id} className="h-12 border-b border-border last:border-b-0">
+                  <td className="px-4 font-medium text-text">
+                    {apiKey.name}
+                    {apiKey.status !== 'active' ? <span className="ml-2 text-xs font-normal text-subtle">{apiKey.status}</span> : null}
+                  </td>
+                  <td className="px-4 font-mono text-xs text-muted">{apiKey.keyPrefix}...</td>
+                  <td className="px-4"><Badge tone="mono">{apiKey.scopes.join(', ')}</Badge></td>
+                  <td className="px-4 tabular-nums text-muted">{apiKey.lastUsedAt ? formatDate(apiKey.lastUsedAt) : 'Never'}</td>
+                  <td className="px-4 tabular-nums text-muted">{apiKey.expiresAt ? formatDate(apiKey.expiresAt) : 'Never'}</td>
+                  <td className="px-4 text-right">
+                    <button
+                      type="button"
+                      onClick={() => revokeKey(apiKey.id)}
+                      disabled={apiKey.status === 'revoked'}
+                      className="rounded-md px-2 py-1 text-[13px] font-medium text-danger transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:pointer-events-none disabled:opacity-40"
+                    >
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
-      <div className="mt-6 grid gap-6">
-        <Card className="min-w-0 p-4 sm:p-5">
-          <div><h2 className="text-lg font-extrabold">API Keys</h2><p className="mt-1 text-sm text-slate-500">Keys can only upload files. Raw secrets are never stored.</p></div>
-          <div className="mt-4 grid gap-3">
-            {apiKeys.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-center sm:p-6"><KeyRound className="mx-auto h-8 w-8 text-blue-600" /><p className="mt-3 font-extrabold">No API keys yet</p><p className="mt-1 text-sm text-slate-500">Create one key, copy it once, then use the docs below.</p><Button className="mt-4 w-full sm:w-auto" onClick={() => setCreateOpen(true)}>Create API Key</Button></div> : apiKeys.map((apiKey) => <div key={apiKey.id} className="grid min-w-0 gap-4 rounded-2xl bg-slate-50 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-              <div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-2"><p className="min-w-0 break-words font-semibold text-slate-950">{apiKey.name}</p><span className={apiKey.status === 'active' ? 'rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700' : 'rounded-full bg-slate-200 px-2 py-0.5 text-xs font-bold text-slate-600'}>{apiKey.status}</span></div><div className="mt-2 grid min-w-0 gap-1 text-sm text-slate-500 sm:grid-cols-2"><p className="min-w-0 truncate"><span className="font-semibold text-slate-700">Prefix:</span> {apiKey.keyPrefix}...</p><p className="min-w-0 break-words"><span className="font-semibold text-slate-700">Created:</span> {formatDate(apiKey.createdAt)}</p><p className="min-w-0 break-words"><span className="font-semibold text-slate-700">Last used:</span> {apiKey.lastUsedAt ? formatDate(apiKey.lastUsedAt) : 'Never'}</p><p className="min-w-0 break-words"><span className="font-semibold text-slate-700">Scope:</span> {apiKey.scopes.join(', ')}</p></div></div>
-              <Button className="w-full lg:w-auto" variant="danger" onClick={() => revokeKey(apiKey.id)} disabled={apiKey.status === 'revoked'}><Trash2 className="h-4 w-4" />Revoke</Button>
-            </div>)}
+      <section className="mt-8">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-text">Quick start</h2>
+            <p className="mt-0.5 text-[13px] text-muted">Upload a file with <span className="font-mono text-xs">POST /api/v1/uploads</span> and your key as a Bearer token.</p>
           </div>
-        </Card>
+          <Button variant="secondary" size="sm" onClick={() => copy('curl', curlExample)}><CopyIcon id="curl" />{copied === 'curl' ? 'Copied' : 'Copy'}</Button>
+        </div>
+        <pre className="mt-3 max-w-full overflow-auto rounded-[10px] border border-border bg-surface p-4 font-mono text-xs leading-relaxed text-text">{curlExample}</pre>
+      </section>
 
-        <Card className="min-w-0 p-4 sm:p-5">
-          <div><h2 className="text-lg font-extrabold">Upload API Docs</h2><p className="mt-1 text-sm text-slate-500">Multipart upload uses the same storage routing as dashboard uploads.</p></div>
-          <div className="mt-4 grid gap-4 text-sm text-slate-600">
-            <div className="min-w-0"><div className="mb-2 flex items-center justify-between gap-3"><p className="font-bold text-slate-950">Endpoint</p><Button variant="outline" size="sm" onClick={() => copy(`${API_URL}/api/v1/uploads`)}><Clipboard className="h-4 w-4" />Copy</Button></div><code className="block min-w-0 max-w-full overflow-x-auto rounded-xl bg-slate-100 p-3 text-xs text-slate-950 sm:text-sm">POST {API_URL}/api/v1/uploads</code></div>
-            <div className="min-w-0"><p className="font-bold text-slate-950">Auth Header</p><code className="mt-2 block min-w-0 max-w-full overflow-x-auto rounded-xl bg-slate-100 p-3 text-xs text-slate-950 sm:text-sm">Authorization: Bearer 9d_live_xxx</code></div>
-            <div className="min-w-0"><div className="mb-2 flex items-center justify-between gap-3"><p className="font-bold text-slate-950">cURL</p><Button variant="outline" size="sm" onClick={() => copy(curlExample)}><Clipboard className="h-4 w-4" />Copy</Button></div><pre className="max-h-72 max-w-full overflow-auto rounded-xl bg-slate-950 p-3 text-xs leading-relaxed text-white">{curlExample}</pre></div>
-            <div className="min-w-0"><div className="mb-2 flex items-center justify-between gap-3"><p className="font-bold text-slate-950">JavaScript</p><Button variant="outline" size="sm" onClick={() => copy(jsExample)}><Clipboard className="h-4 w-4" />Copy</Button></div><pre className="max-h-72 max-w-full overflow-auto rounded-xl bg-slate-950 p-3 text-xs leading-relaxed text-white">{jsExample}</pre></div>
-          </div>
-        </Card>
-      </div>
-
-      <Dialog open={createOpen} title="Create API key" onClose={() => setCreateOpen(false)}>
-        <p className="mb-3 text-[13px] text-muted">API keys can upload files using the public API.</p>
-        <form className="grid gap-4" onSubmit={createKey}>
-          <input className="h-11 rounded-xl border border-slate-200 px-3 text-sm" placeholder="Key name" value={keyName} onChange={(event) => setKeyName(event.target.value)} required />
-          <div className="grid gap-3 sm:flex sm:justify-end"><Button variant="outline" type="button" onClick={() => setCreateOpen(false)} disabled={loading}>Cancel</Button><Button type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Key'}</Button></div>
+      <Dialog
+        open={createOpen}
+        title="Create API key"
+        onClose={() => setCreateOpen(false)}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCreateOpen(false)} disabled={loading}>Cancel</Button>
+            <Button type="submit" form="create-key-form" disabled={loading}>{loading ? 'Creating...' : 'Create key'}</Button>
+          </>
+        }
+      >
+        <form id="create-key-form" className="grid gap-4" onSubmit={createKey}>
+          <label className="grid gap-1.5 text-[13px] font-medium text-text">
+            Name
+            <Input placeholder="e.g. Backup script" value={keyName} onChange={(e) => setKeyName(e.target.value)} required />
+          </label>
+          <label className="grid gap-1.5 text-[13px] font-medium text-text">
+            Expires (optional)
+            <Input type="date" value={expiry} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setExpiry(e.target.value)} />
+            <span className="text-xs font-normal text-muted">Leave empty for a key that never expires.</span>
+          </label>
         </form>
       </Dialog>
     </>
