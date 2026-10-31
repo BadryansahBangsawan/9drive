@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
-import { API_URL, apiFetch, refreshAccessToken } from '@/lib/api'
-import { getAccessToken } from '@/lib/auth'
+import { API_URL, apiFetch, authedFetch, refreshAccessToken } from '@/lib/api'
+import { clearAuthSession, getAccessToken } from '@/lib/auth'
 
 export type UploadProgressStatus = 'queued' | 'uploading' | 'done' | 'error' | 'partial'
 export type UploadProgressFile = { name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string }
@@ -68,9 +68,15 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
     return attempt().catch(async (error: Error & { status?: number }) => {
       // Expired access token: refresh once and retry the whole request.
-      if (error.status === 401 && (await refreshAccessToken())) {
-        onProgress(0)
-        return attempt()
+      if (error.status === 401) {
+        if (await refreshAccessToken()) {
+          onProgress(0)
+          return attempt().catch((retryError: Error & { status?: number }) => {
+            if (retryError.status === 401) clearAuthSession()
+            throw retryError
+          })
+        }
+        clearAuthSession()
       }
       throw error
     })
@@ -126,19 +132,18 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       const endOffset = Math.min(startOffset + CHUNK_SIZE, file.size)
       const chunk = file.slice(startOffset, endOffset)
 
-      // We use raw fetch with authorization header for binary stream upload
-      const response = await fetch(`${API_URL}/uploads/resumable/chunk/${sessionId}`, {
+      // Raw fetch for the binary body; authedFetch refreshes an expired token mid-upload.
+      const response = await authedFetch(`/uploads/resumable/chunk/${sessionId}`, {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${getAccessToken()}`,
           'Content-Range': `bytes ${startOffset}-${endOffset - 1}/${file.size}`,
-          'Content-Length': String(chunk.size)
         },
         body: chunk
       })
 
       if (!response.ok) {
-        throw new Error('Chunk upload failed')
+        const body = await response.json().catch(() => null) as { message?: string } | null
+        throw new Error(body?.message || 'Chunk upload failed')
       }
 
       const resData = await response.json() as { status: string; offset?: string }

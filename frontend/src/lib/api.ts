@@ -23,6 +23,26 @@ export async function refreshAccessToken() {
   return true
 }
 
+// Raw fetch for requests apiFetch can't make (binary bodies, streamed responses).
+// Sends the access token, refreshes once on 401, and clears the session if that fails.
+export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const send = () => {
+    const headers = new Headers(init.headers)
+    const token = getAccessToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    return fetch(`${API_URL}${path}`, { ...init, headers })
+  }
+  const response = await send()
+  if (response.status !== 401) return response
+  if (await refreshAccessToken()) {
+    const retried = await send()
+    if (retried.status === 401) clearAuthSession()
+    return retried
+  }
+  clearAuthSession()
+  return response
+}
+
 export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const headers = new Headers(options.headers)
   const token = getAccessToken()
