@@ -13,7 +13,6 @@ import { accountLabel } from '@/lib/accounts'
 import { apiFetch, formatBytes } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type StorageSummary = { totalBytes: string | null; usedBytes: string; availableBytes: string | null }
 type ConnectedAccount = {
   id: string
   email: string
@@ -30,7 +29,7 @@ const DANGER_THRESHOLD = 85
 const EMPTY_S3 = { name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKeyId: '', secretAccessKey: '', forcePathStyle: false, quotaBytes: '' }
 
 const ROUTING_OPTIONS: { mode: RoutingMode; title: string; description: string }[] = [
-  { mode: 'most_available', title: 'Most available', description: 'Send each upload to the account with the most free space.' },
+  { mode: 'most_available', title: 'Most free space', description: 'Send each upload to the account with the most free space.' },
   { mode: 'round_robin', title: 'Round robin', description: 'Rotate through accounts so usage stays even.' },
   { mode: 'priority', title: 'Priority order', description: 'Fill accounts in the order you set below.' },
 ]
@@ -42,7 +41,7 @@ function notifyStorageChanged() {
 function usedPercent(account: ConnectedAccount): number | null {
   const total = Number(account.storageAccount?.totalBytes ?? 0)
   if (!account.storageAccount?.totalBytes || !(total > 0)) return null
-  return Math.min(100, (Number(account.storageAccount.usedBytes) / total) * 100)
+  return Math.min(100, Math.round((Number(account.storageAccount.usedBytes) / total) * 100))
 }
 
 function syncedAgo(value: string | null | undefined) {
@@ -67,7 +66,7 @@ function ProviderTile({ provider }: { provider: string }) {
 
 export function QuotaTrackerPage() {
   const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
-  const [summary, setSummary] = useState<StorageSummary | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
   const [policy, setPolicy] = useState<RoutingPolicy>({ mode: 'most_available', priorityAccountIds: [] })
   const [loading, setLoading] = useState(true)
@@ -84,12 +83,10 @@ export function QuotaTrackerPage() {
   const [connectingS3, setConnectingS3] = useState(false)
 
   async function load() {
-    const [summaryData, accountData, policyData] = await Promise.all([
-      apiFetch<StorageSummary>('/storage/summary'),
+    const [accountData, policyData] = await Promise.all([
       apiFetch<{ accounts: ConnectedAccount[] }>('/connected-accounts'),
       apiFetch<{ policy: RoutingPolicy }>('/storage/routing-policy'),
     ])
-    setSummary(summaryData)
     setAccounts(accountData.accounts)
     setPolicy({ mode: policyData.policy.mode, priorityAccountIds: policyData.policy.priorityAccountIds })
   }
@@ -98,7 +95,7 @@ export function QuotaTrackerPage() {
     setBreadcrumb([{ label: 'Accounts & quota' }])
     setHeaderActions(null)
     load()
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load accounts'))
+      .catch((err) => { setLoadFailed(true); setError(err instanceof Error ? err.message : 'Failed to load accounts') })
       .finally(() => setLoading(false))
   }, [])
 
@@ -203,10 +200,10 @@ export function QuotaTrackerPage() {
   }
 
   function orderedAccounts() {
-    const byId = new Map(accounts.map((a) => [a.id, a]))
+    const byId = new Map(connected.map((a) => [a.id, a]))
     const ordered = policy.priorityAccountIds.map((id) => byId.get(id)).filter((a): a is ConnectedAccount => Boolean(a))
     const seen = new Set(ordered.map((a) => a.id))
-    return [...ordered, ...accounts.filter((a) => !seen.has(a.id))]
+    return [...ordered, ...connected.filter((a) => !seen.has(a.id))]
   }
 
   function move(accountId: string, direction: -1 | 1) {
@@ -220,16 +217,20 @@ export function QuotaTrackerPage() {
     savePolicy({ ...policy, priorityAccountIds: next }).catch(() => undefined)
   }
 
+  const connected = accounts.filter((a) => a.status === 'connected')
+
   const connectActions = (
     <>
       <Button variant="secondary" onClick={() => { setS3Error(''); setS3Open(true) }}><Database className="h-4 w-4" strokeWidth={1.5} />Connect S3</Button>
-      <Button onClick={connectDrive} disabled={connecting}><Cloud className="h-4 w-4" strokeWidth={1.5} />{connecting ? 'Opening...' : 'Connect Drive'}</Button>
+      <Button onClick={connectDrive} disabled={connecting}><Cloud className="h-4 w-4" strokeWidth={1.5} />{connecting ? 'Opening...' : 'Connect Google Drive'}</Button>
     </>
   )
 
-  const usedTotal = accounts.reduce((sum, a) => sum + Number(a.storageAccount?.usedBytes ?? 0), 0)
-  const capacity = summary?.totalBytes != null ? Number(summary.totalBytes) : null
-  const barBase = capacity && capacity > 0 ? Math.max(capacity, usedTotal) : usedTotal
+  const usedTotal = connected.reduce((sum, a) => sum + Number(a.storageAccount?.usedBytes ?? 0), 0)
+  const unlimitedAny = connected.some((a) => a.storageAccount?.totalBytes == null)
+  const capacity = connected.reduce((sum, a) => sum + Number(a.storageAccount?.totalBytes ?? 0), 0)
+  const freeTotal = connected.reduce((sum, a) => sum + Number(a.storageAccount?.availableBytes ?? 0), 0)
+  const barBase = unlimitedAny ? usedTotal : Math.max(capacity, usedTotal)
   const ordered = orderedAccounts()
 
   return (
@@ -240,7 +241,7 @@ export function QuotaTrackerPage() {
 
       {loading ? (
         <p className="mt-10 text-center text-[13px] text-muted">Loading accounts…</p>
-      ) : accounts.length === 0 ? (
+      ) : loadFailed ? null : accounts.length === 0 ? (
         <EmptyState
           icon={<Cloud className="h-4 w-4" strokeWidth={1.5} />}
           title="No connected storage"
@@ -252,18 +253,18 @@ export function QuotaTrackerPage() {
           <section aria-label="Summary" className="mt-6">
             <Card className="p-5">
               <div className="grid grid-cols-3 gap-4">
-                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Used</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{formatBytes(summary?.usedBytes)}</p></div>
-                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Free</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{summary?.availableBytes === null ? 'Unlimited' : formatBytes(summary?.availableBytes)}</p></div>
-                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Total capacity</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{summary?.totalBytes === null ? 'Unlimited' : formatBytes(summary?.totalBytes)}</p></div>
+                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Used</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{formatBytes(usedTotal)}</p></div>
+                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Free</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{unlimitedAny ? 'Unlimited' : formatBytes(freeTotal)}</p></div>
+                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Total capacity</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{unlimitedAny ? 'Unlimited' : formatBytes(capacity)}</p></div>
               </div>
               <div className="mt-4 flex h-2 overflow-hidden rounded-full bg-selected" role="img" aria-label="Usage by account">
-                {barBase > 0 ? accounts.map((a) => {
+                {barBase > 0 ? connected.map((a) => {
                   const width = (Number(a.storageAccount?.usedBytes ?? 0) / barBase) * 100
                   return width > 0 ? <span key={a.id} style={{ width: `${width}%` }} className={cn('h-full border-r border-bg last:border-r-0', a.provider === 's3' ? 'bg-s3' : 'bg-drive')} title={`${accountLabel(a)}: ${formatBytes(a.storageAccount?.usedBytes)}`} /> : null
                 }) : null}
               </div>
               <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-                {accounts.map((a) => (
+                {connected.map((a) => (
                   <li key={a.id} className="flex min-w-0 max-w-full items-center gap-2 text-[12px] text-muted">
                     <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', a.provider === 's3' ? 'bg-s3' : 'bg-drive')} aria-hidden="true" />
                     <span className="truncate">{accountLabel(a)}</span>
@@ -292,12 +293,12 @@ export function QuotaTrackerPage() {
                       <p className="truncate text-[12px] text-muted" title={account.email}>{account.email} · {syncedAgo(account.storageAccount?.lastSyncedAt)}</p>
                       {account.lastError ? <p className="truncate text-[12px] text-danger" title={account.lastError}>{account.lastError}</p> : null}
                     </div>
-                    <div className="hidden w-56 shrink-0 sm:block">
-                      <div className="h-1.5 overflow-hidden rounded-full bg-selected">
+                    <div className="w-auto shrink-0 sm:w-56">
+                      <div className="hidden h-1.5 overflow-hidden rounded-full bg-selected sm:block">
                         {percent !== null ? <div className={cn('h-full rounded-full', danger ? 'bg-danger' : 'bg-primary')} style={{ width: `${percent}%` }} /> : null}
                       </div>
-                      <p className={cn('mt-1 text-[12px] tabular-nums', danger ? 'text-danger' : 'text-muted')}>
-                        {formatBytes(account.storageAccount?.usedBytes)} / {unlimited ? 'Unlimited' : formatBytes(account.storageAccount?.totalBytes)}{percent !== null ? ` · ${Math.round(percent)}%` : ''}
+                      <p className={cn('text-right text-[12px] tabular-nums sm:mt-1 sm:text-left', danger ? 'text-danger' : 'text-muted')}>
+                        {formatBytes(account.storageAccount?.usedBytes)} / {unlimited ? 'Unlimited' : formatBytes(account.storageAccount?.totalBytes)}{percent !== null ? ` · ${percent}%` : ''}
                       </p>
                     </div>
                     <Button variant="secondary" size="sm" onClick={() => sync(account.id)} disabled={syncingId === account.id}>
