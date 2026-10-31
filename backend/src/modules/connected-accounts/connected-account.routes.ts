@@ -4,6 +4,8 @@ import { z } from 'zod'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
+import { createAuditLog } from '../../utils/audit.js'
+import { accountLabel } from '../../utils/account-label.js'
 import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { completeGoogleLogin } from '../auth/google-login.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
@@ -141,6 +143,7 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
     try {
       await testS3Connection(config)
       const quota = await syncS3Quota(account.id)
+      await createAuditLog(req.user!.id, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 's3', accountLabel: accountLabel(account) })
       return res.status(201).json({
         account: {
           ...account,
@@ -230,6 +233,7 @@ connectedAccountRouter.get('/google/callback', async (req, res, next) => {
       },
     })
     await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date() } })
+    await createAuditLog(oauthState.userId, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
     await syncGoogleQuota(account.id)
     return res.redirect(`${env.FRONTEND_URL}/google-connected?status=success`)
   } catch (error) {
@@ -260,7 +264,9 @@ connectedAccountRouter.post('/:id/sync-quota', requireAuth, async (req: AuthRequ
 connectedAccountRouter.delete('/:id', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const accountId = String(req.params.id)
-    await prisma.connectedAccount.updateMany({ where: { id: accountId, userId: req.user!.id }, data: { status: 'disconnected' } })
+    const account = await prisma.connectedAccount.findFirst({ where: { id: accountId, userId: req.user!.id } })
+    const result = await prisma.connectedAccount.updateMany({ where: { id: accountId, userId: req.user!.id }, data: { status: 'disconnected' } })
+    if (result.count > 0 && account) await createAuditLog(req.user!.id, 'DISCONNECT_ACCOUNT', 'account', account.id, { provider: account.provider, accountLabel: accountLabel(account) })
     return res.json({ status: 'ok' })
   } catch (error) {
     return next(error)

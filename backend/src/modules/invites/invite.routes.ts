@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
+import { createAuditLog } from '../../utils/audit.js'
 
 export const inviteRouter = Router()
 inviteRouter.use(requireAuth)
@@ -74,12 +75,13 @@ inviteRouter.post('/', async (req: AuthRequest, res, next) => {
     const email = body.email.trim().toLowerCase()
     const inviter = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id }, select: { email: true } })
     if (email === inviter.email) return res.status(400).json({ code: 'INVITE_SELF_NOT_ALLOWED', message: 'You cannot invite yourself.' })
-    await assertTargetOwner(req.user!.id, body.targetType, body.targetId)
+    const target = await assertTargetOwner(req.user!.id, body.targetType, body.targetId)
     const invite = await prisma.workspaceInvite.upsert({
       where: { inviterId_inviteeEmail_targetType_targetId: { inviterId: req.user!.id, inviteeEmail: email, targetType: body.targetType, targetId: body.targetId } },
       create: { inviterId: req.user!.id, inviteeEmail: email, role: body.role, targetType: body.targetType, targetId: body.targetId, status: 'pending', acceptedAt: null },
       update: { role: body.role, status: 'pending', acceptedAt: null, revokedAt: null },
     })
+    await createAuditLog(req.user!.id, 'INVITE_SENT', 'invite', invite.id, { email, targetType: body.targetType, targetName: target.name })
     const targetByKey = await resolveTargets([invite])
     return res.status(201).json({ invite: serializeInvite(invite, targetByKey.get(`${invite.targetType}:${invite.targetId}`) ?? null) })
   } catch (error) {
@@ -89,8 +91,12 @@ inviteRouter.post('/', async (req: AuthRequest, res, next) => {
 
 inviteRouter.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
-    const result = await prisma.workspaceInvite.updateMany({ where: { id: String(req.params.id), inviterId: req.user!.id, revokedAt: null }, data: { status: 'revoked', revokedAt: new Date() } })
-    if (result.count === 0) return res.status(404).json({ code: 'INVITE_NOT_FOUND', message: 'Invite not found.' })
+    const inviteId = String(req.params.id)
+    const invite = await prisma.workspaceInvite.findFirst({ where: { id: inviteId, inviterId: req.user!.id, revokedAt: null } })
+    const result = await prisma.workspaceInvite.updateMany({ where: { id: inviteId, inviterId: req.user!.id, revokedAt: null }, data: { status: 'revoked', revokedAt: new Date() } })
+    if (result.count === 0 || !invite) return res.status(404).json({ code: 'INVITE_NOT_FOUND', message: 'Invite not found.' })
+    const targetByKey = await resolveTargets([invite])
+    await createAuditLog(req.user!.id, 'INVITE_REVOKED', 'invite', invite.id, { email: invite.inviteeEmail, targetType: invite.targetType, targetName: targetByKey.get(`${invite.targetType}:${invite.targetId}`)?.name ?? null })
     return res.json({ status: 'ok' })
   } catch (error) {
     return next(error)

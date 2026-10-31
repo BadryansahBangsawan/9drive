@@ -1,6 +1,8 @@
 import type { Auth } from 'googleapis'
 import type { OauthState, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
+import { accountLabel } from '../../utils/account-label.js'
+import { createAuditLog } from '../../utils/audit.js'
 import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { hashPassword } from '../../utils/password.js'
 import { syncGoogleQuota } from '../google/google.service.js'
@@ -66,6 +68,7 @@ export async function completeGoogleLogin(oauthState: OauthState & { providerCon
     update: accountData,
   })
 
+  await createAuditLog(user.id, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
   await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
   await syncGoogleQuota(account.id).catch(() => undefined)
 
