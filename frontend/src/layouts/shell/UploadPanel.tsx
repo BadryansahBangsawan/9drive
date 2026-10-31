@@ -57,7 +57,7 @@ export function UploadPanel() {
                     </div>
                   </>
                 ) : file.status === 'error' ? (
-                  <p className="text-xs text-danger">Failed</p>
+                  <p className="truncate text-xs text-danger" title={file.error}>{file.error ? `Failed · ${file.error}` : 'Failed'}</p>
                 ) : (
                   <p className="truncate text-xs tabular-nums text-muted">{formatBytes(file.size)}</p>
                 )}

@@ -3,7 +3,7 @@ import { API_URL, apiFetch, authedFetch, refreshAccessToken } from '@/lib/api'
 import { clearAuthSession, getAccessToken } from '@/lib/auth'
 
 export type UploadProgressStatus = 'queued' | 'uploading' | 'done' | 'error' | 'partial'
-export type UploadProgressFile = { id: string; name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string }
+export type UploadProgressFile = { id: string; name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string; error?: string }
 export type UploadProgressState = { open: boolean; fileName: string; percent: number; status: UploadProgressStatus; files: UploadProgressFile[] }
 
 type ResumableSession = { sessionId: string; file: File; folderId?: string | null; targetAccountId?: string | null }
@@ -20,6 +20,15 @@ const UploadContext = createContext<UploadContextType | undefined>(undefined)
 // Per-upload ids keep same-named files from sharing progress rows or resumable sessions.
 let uploadCounter = 0
 const newUploadId = () => `upload-${Date.now()}-${++uploadCounter}`
+
+// 16 MiB: a multiple of 256 KiB (Google Drive requirement), far fewer requests than 5 MiB for
+// multi-GB files, and well under Cloudflare's 100 MB per-request body limit.
+const CHUNK_SIZE = 16 * 1024 * 1024
+// A multi-hour upload will hit network blips and Google 5xx/429s; retry a chunk this many times
+// (resuming from the offset Google actually stored) before giving up.
+const MAX_CHUNK_ATTEMPTS = 6
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
 
 export function UploadProvider({ children }: { children: ReactNode }) {
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>({
@@ -87,7 +96,6 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }
 
   async function uploadSingleFileResumable(uploadId: string, file: File, folderId: string | null, onProgress: (percent: number) => void, sessionIdToRetry?: string, targetAccountId?: string | null, onAccountLabel?: (label: string) => void) {
-    const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks (must be multiple of 256KB for Google Drive)
     let sessionId = sessionIdToRetry || ''
     let startOffset = 0
 
@@ -132,25 +140,54 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     }
 
     // 2. Upload chunk by chunk
+    let failedAttempts = 0
     while (startOffset < file.size) {
       const endOffset = Math.min(startOffset + CHUNK_SIZE, file.size)
       const chunk = file.slice(startOffset, endOffset)
 
-      // Raw fetch for the binary body; authedFetch refreshes an expired token mid-upload.
-      const response = await authedFetch(`/uploads/resumable/chunk/${sessionId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Range': `bytes ${startOffset}-${endOffset - 1}/${file.size}`,
-        },
-        body: chunk
-      })
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { message?: string } | null
-        throw new Error(body?.message || 'Chunk upload failed')
+      let response: Response | null = null
+      try {
+        // Raw fetch for the binary body; authedFetch refreshes an expired token mid-upload.
+        response = await authedFetch(`/uploads/resumable/chunk/${sessionId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Range': `bytes ${startOffset}-${endOffset - 1}/${file.size}`,
+          },
+          body: chunk
+        })
+      } catch {
+        response = null // network error: retry below
       }
 
-      const resData = await response.json() as { status: string; offset?: string }
+      const retriable = !response || response.status >= 500 || response.status === 429
+      if (retriable) {
+        failedAttempts += 1
+        if (failedAttempts >= MAX_CHUNK_ATTEMPTS) {
+          const body = response ? await response.json().catch(() => null) as { message?: string } | null : null
+          throw new Error(body?.message || 'Upload kept failing; check your connection and press Retry.')
+        }
+        await sleep(Math.min(30_000, 1000 * 2 ** failedAttempts))
+        // Resume from what Google actually stored; a failed chunk may be partly persisted.
+        try {
+          const status = await apiFetch<{ status: string; offset: string }>(`/uploads/resumable/status/${sessionId}`)
+          if (status.status === 'completed') {
+            onProgress(100)
+            return
+          }
+          if (status.status === 'uploading') startOffset = Number(status.offset)
+        } catch {
+          // keep the current offset; the next chunk response will correct it
+        }
+        continue
+      }
+
+      if (!response!.ok) {
+        const body = await response!.json().catch(() => null) as { message?: string } | null
+        throw new Error(body?.message || 'Chunk upload failed')
+      }
+      failedAttempts = 0
+
+      const resData = await response!.json() as { status: string; offset?: string }
       if (resData.status === 'completed') {
         onProgress(100)
         break
@@ -197,7 +234,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         }, undefined, targetAccountId, (label) => updateFileProgress(uploadId, { accountLabel: label }))
       } catch (err) {
         console.error('File upload failed:', file.name, err)
-        updateFileProgress(uploadId, { status: 'error' }, () => 'partial')
+        updateFileProgress(uploadId, { status: 'error', error: errorMessage(err, 'Upload failed') }, () => 'partial')
       }
     }
 
@@ -210,7 +247,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const session = resumableSessions[uploadId]
     if (!session) return
 
-    updateFileProgress(uploadId, { status: 'uploading' }, () => 'uploading')
+    updateFileProgress(uploadId, { status: 'uploading', error: undefined }, () => 'uploading')
 
     try {
       await uploadSingleFileResumable(uploadId, session.file, session.folderId || null, (filePercent) => {
@@ -221,7 +258,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       window.dispatchEvent(new Event('9drive:upload-completed'))
     } catch (err) {
       console.error('Retry upload failed:', session.file.name, err)
-      updateFileProgress(uploadId, { status: 'error' }, () => 'partial')
+      updateFileProgress(uploadId, { status: 'error', error: errorMessage(err, 'Upload failed') }, () => 'partial')
     }
   }
 
