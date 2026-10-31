@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CheckCircle, XCircle } from 'lucide-react'
-import { Card } from '@/components/ui/card'
+import { AuthShell } from '@/components/auth/AuthShell'
 
 export function GoogleConnectedPage() {
   const [params] = useSearchParams()
@@ -19,12 +19,12 @@ export function GoogleConnectedPage() {
   }, [navigate, status])
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-5">
-      <Card className="w-full max-w-sm p-6 text-center">
-        {ok ? <CheckCircle className="mx-auto h-10 w-10 text-emerald-500" /> : <XCircle className="mx-auto h-10 w-10 text-red-500" />}
-        <h1 className="mt-4 text-xl font-extrabold">{ok ? 'Google Drive Connected' : 'Connection Failed'}</h1>
-        <p className="mt-2 text-sm text-slate-500">{ok ? 'This window will close automatically.' : 'Close this window and try again.'}</p>
-      </Card>
-    </main>
+    <AuthShell>
+      <div className="text-center">
+        {ok ? <CheckCircle className="mx-auto h-8 w-8 text-drive" strokeWidth={1.5} /> : <XCircle className="mx-auto h-8 w-8 text-danger" strokeWidth={1.5} />}
+        <h1 className="mt-4 text-lg font-semibold text-text">{ok ? 'Google Drive connected' : 'Connection failed'}</h1>
+        <p className="mt-1 text-[13px] text-muted">{ok ? 'This window will close automatically.' : 'Close this window and try again.'}</p>
+      </div>
+    </AuthShell>
   )
 }

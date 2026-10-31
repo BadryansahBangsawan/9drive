@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { HardDrive } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
+import { AuthDivider, AuthLogo, AuthShell } from '@/components/auth/AuthShell'
 import { GoogleLogo } from '@/components/auth/GoogleLogo'
 import { Input } from '@/components/ui/input'
 import { apiFetch } from '@/lib/api'
@@ -46,24 +45,21 @@ export function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-50 p-5">
-      <Card className="w-full max-w-md p-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white"><HardDrive className="h-6 w-6" /></div>
-          <div><h1 className="text-2xl font-extrabold">Login</h1><p className="text-sm text-slate-500">Access your 9Drive gateway.</p></div>
-        </div>
-        <form onSubmit={submit} className="mt-6 grid gap-4">
-          <label className="grid gap-2 text-sm font-semibold">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
-          <label className="grid gap-2 text-sm font-semibold">Password<Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
-          {error ? <p className="rounded-xl bg-red-50 p-3 text-sm text-red-600">{error}</p> : null}
-          <Button disabled={loading}>{loading ? 'Logging in...' : 'Login'}</Button>
-        </form>
-        <div className="mt-4 grid gap-3">
-          <div className="flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-slate-400"><span className="h-px flex-1 bg-slate-200" />or<span className="h-px flex-1 bg-slate-200" /></div>
-          <Button variant="outline" disabled={googleLoading} onClick={continueWithGoogle}><GoogleLogo />{googleLoading ? 'Redirecting...' : 'Continue with Google'}</Button>
-        </div>
-        <p className="mt-5 text-center text-sm text-slate-500">No account? <Link className="font-bold text-blue-600" to="/register">Register</Link></p>
-      </Card>
-    </main>
+    <AuthShell>
+      <AuthLogo />
+      <h1 className="mt-4 text-xl font-semibold tracking-[-0.015em] text-text">Log in to 9Drive</h1>
+      <p className="mt-1 text-[13px] text-muted">Access your storage gateway.</p>
+      <Button variant="secondary" size="lg" className="mt-6 w-full" disabled={googleLoading} onClick={continueWithGoogle}>
+        <GoogleLogo />{googleLoading ? 'Redirecting...' : 'Continue with Google'}
+      </Button>
+      <AuthDivider />
+      <form onSubmit={submit} className="grid gap-4">
+        <label className="grid gap-1.5 text-[13px] font-medium text-text">Email<Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+        <label className="grid gap-1.5 text-[13px] font-medium text-text">Password<Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
+        {error ? <p role="alert" className="text-[13px] text-danger">{error}</p> : null}
+        <Button size="lg" className="w-full" disabled={loading}>{loading ? 'Logging in...' : 'Log in'}</Button>
+      </form>
+      <p className="mt-5 text-center text-[13px] text-muted">No account? <Link className="font-medium text-accent hover:underline" to="/register">Register</Link></p>
+    </AuthShell>
   )
 }

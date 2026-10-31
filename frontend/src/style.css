@@ -95,7 +95,7 @@
 /* Video Shell elements */
 .shared-video-shell {
   align-items: center;
-  background: #000;
+  background: var(--surface);
   display: flex;
   height: 100%;
   justify-content: center;
