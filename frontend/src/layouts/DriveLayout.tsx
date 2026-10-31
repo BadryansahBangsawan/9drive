@@ -44,7 +44,10 @@ export function DriveLayout() {
     [],
   )
   // Task 9 replaces this with a real UploadDialog rendered by the layout.
-  const openUpload = useCallback(() => navigate('/all-files?upload=1'), [navigate])
+  const openUpload = useCallback(() => {
+    const folderId = location.pathname === '/all-files' ? new URLSearchParams(location.search).get('folderId') : null
+    navigate(folderId ? `/all-files?folderId=${encodeURIComponent(folderId)}&upload=1` : '/all-files?upload=1')
+  }, [navigate, location.pathname, location.search])
 
   const breadcrumb =
     custom && custom.path === location.pathname
