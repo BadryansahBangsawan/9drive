@@ -4,6 +4,7 @@ import { Router } from 'express'
 import { Transform, type Readable } from 'node:stream'
 import { z } from 'zod'
 import { google } from 'googleapis'
+import type { ConnectedAccount, Folder } from '@prisma/client'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
@@ -124,6 +125,25 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
     })[0]?.account
 }
 
+// Picks the account for an upload. An explicit target (upload dialog) is a hard requirement.
+// A folder's bound account is only a preference: folders are app-side, so when that account
+// is full the upload falls back to normal routing.
+async function selectUploadAccount(userId: string, sizeBytes: bigint, folderId: string | null, explicitAccountId?: string | null, reservedBytesByAccount = new Map<string, bigint>()) {
+  const folder = folderId ? await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId, deletedAt: null } }) : null
+  if (explicitAccountId) return { folder, account: await selectAccount(userId, sizeBytes, reservedBytesByAccount, explicitAccountId) }
+  if (folder?.connectedAccountId) {
+    const preferred = await selectAccount(userId, sizeBytes, reservedBytesByAccount, folder.connectedAccountId)
+    if (preferred) return { folder, account: preferred }
+  }
+  return { folder, account: await selectAccount(userId, sizeBytes, reservedBytesByAccount) }
+}
+
+// The folder's Drive mirror only exists on the account it is bound to; elsewhere use the 9drive root.
+async function driveParentFor(account: ConnectedAccount, folder: Folder | null) {
+  if (folder?.providerFolderId && folder.connectedAccountId === account.id) return folder.providerFolderId
+  return ensureGoogleAppFolder(account)
+}
+
 export async function handleUpload(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     logUpload('request started', { userId: req.user!.id, contentLength: req.headers['content-length'] })
@@ -189,15 +209,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         }
 
         const folderId = meta.folderId || null
-        let targetAccountId: string | undefined = fields.targetAccountId || undefined
-        if (folderId) {
-          const folderRecord = await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } })
-          if (folderRecord.connectedAccountId) {
-            targetAccountId = folderRecord.connectedAccountId
-          }
-        }
-
-        const account = await selectAccount(req.user!.id, meta.sizeBytes, reservedBytesByAccount, targetAccountId)
+        const { folder, account } = await selectUploadAccount(req.user!.id, meta.sizeBytes, folderId, fields.targetAccountId, reservedBytesByAccount)
         if (!account) {
           fileStream.resume()
           failed.push({ fileName, code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space for this upload.' })
@@ -241,14 +253,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         } else {
           const auth = await getAuthedGoogleClient(account)
           const drive = google.drive({ version: 'v3', auth })
-          const appFolderId = await ensureGoogleAppFolder(account)
-          let targetParentId = appFolderId
-          if (folderId) {
-            const folderRecord = await prisma.folder.findFirst({ where: { id: folderId, userId: req.user!.id } })
-            if (folderRecord?.providerFolderId) {
-              targetParentId = folderRecord.providerFolderId
-            }
-          }
+          const targetParentId = await driveParentFor(account, folder)
           const uploaded = await drive.files.create({
             requestBody: { name: fileName, parents: [targetParentId] },
             media: { mimeType: meta.mimeType, body: counted.stream },
@@ -348,15 +353,7 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     if (sizeBytes > BigInt(env.MAX_UPLOAD_BYTES)) return res.status(400).json({ code: 'UPLOAD_TOO_LARGE', message: 'File exceeds max upload size.' })
 
     const folderId = body.folderId || null
-    let targetAccountId = body.targetAccountId
-    if (folderId) {
-      const folderRecord = await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } })
-      if (folderRecord.connectedAccountId) {
-        targetAccountId = folderRecord.connectedAccountId
-      }
-    }
-
-    const account = await selectAccount(req.user!.id, sizeBytes, undefined, targetAccountId)
+    const { folder, account } = await selectUploadAccount(req.user!.id, sizeBytes, folderId, body.targetAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
     // S3 uploads go through the multipart endpoint, which creates its own session.
@@ -365,14 +362,7 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     }
 
     const auth = await getAuthedGoogleClient(account)
-    const appFolderId = await ensureGoogleAppFolder(account)
-    let targetParentId = appFolderId
-    if (folderId) {
-      const folderRecord = await prisma.folder.findFirst({ where: { id: folderId, userId: req.user!.id } })
-      if (folderRecord?.providerFolderId) {
-        targetParentId = folderRecord.providerFolderId
-      }
-    }
+    const targetParentId = await driveParentFor(account, folder)
 
     // Initiate Google Drive Resumable Session
     const headers = new Headers()

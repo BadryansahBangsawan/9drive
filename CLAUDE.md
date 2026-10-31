@@ -27,7 +27,7 @@ Other scripts that `AGENTS.md` doesn't list:
 - Quota: `syncGoogleQuota` (google.service) vs `syncS3Quota` (s3.service). Both write to `StorageAccount`.
 - Upload: `ensureGoogleAppFolder` + Drive resumable upload vs `buildS3ObjectKey` + `uploadS3Object` (`@aws-sdk/lib-storage`).
 
-**Upload routing** (`modules/uploads/upload.routes.ts`, `selectAccount`):
+**Upload routing** (`modules/uploads/upload.routes.ts`, `selectUploadAccount` → `selectAccount`). An explicit `targetAccountId` from the upload dialog is required as given. A folder's bound account (`Folder.connectedAccountId`) is tried first but is only a preference; if it lacks space, normal routing applies and the Drive file goes to that account's `9drive` root (`driveParentFor`). Normal routing:
 1. Re-sync quota for any account whose last sync is more than 5 minutes old.
 2. Subtract bytes already reserved by earlier files in the same multipart request.
 3. Apply the user's `UploadRoutingPolicy` mode: `most_available` (default), `round_robin` (cursor kept in the DB), or `priority` (`priorityAccountIds`).
