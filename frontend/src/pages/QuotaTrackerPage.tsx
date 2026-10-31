@@ -228,7 +228,7 @@ export function QuotaTrackerPage() {
   )
 
   const usedTotal = connected.reduce((sum, a) => sum + Number(a.storageAccount?.usedBytes ?? 0), 0)
-  const unlimitedAny = connected.some((a) => a.storageAccount?.totalBytes == null)
+  const unlimitedAny = connected.some((a) => a.storageAccount != null && a.storageAccount.totalBytes == null)
   const capacity = connected.reduce((sum, a) => sum + Number(a.storageAccount?.totalBytes ?? 0), 0)
   const freeTotal = connected.reduce((sum, a) => sum + Number(a.storageAccount?.availableBytes ?? 0), 0)
   const barBase = unlimitedAny ? usedTotal : Math.max(capacity, usedTotal)
@@ -282,7 +282,8 @@ export function QuotaTrackerPage() {
               {accounts.map((account) => {
                 const percent = usedPercent(account)
                 const danger = percent !== null && percent >= DANGER_THRESHOLD
-                const unlimited = account.storageAccount?.totalBytes == null
+                const synced = account.storageAccount != null
+                const unlimited = synced && account.storageAccount?.totalBytes == null
                 return (
                   <div key={account.id} className="flex items-center gap-3 px-4 py-3">
                     <ProviderTile provider={account.provider} />
@@ -299,7 +300,7 @@ export function QuotaTrackerPage() {
                         {percent !== null ? <div className={cn('h-full rounded-full', danger ? 'bg-danger' : 'bg-primary')} style={{ width: `${percent}%` }} /> : null}
                       </div>
                       <p className={cn('text-right text-[12px] tabular-nums sm:mt-1 sm:text-left', danger ? 'text-danger' : 'text-muted')}>
-                        {formatBytes(account.storageAccount?.usedBytes)} / {unlimited ? 'Unlimited' : formatBytes(account.storageAccount?.totalBytes)}{percent !== null ? ` · ${percent}%` : ''}
+                        {synced ? <>{formatBytes(account.storageAccount?.usedBytes)} / {unlimited ? 'Unlimited' : formatBytes(account.storageAccount?.totalBytes)}{percent !== null ? ` · ${percent}%` : ''}</> : 'Not synced yet'}
                       </p>
                     </div>
                     <Button variant="secondary" size="sm" onClick={() => sync(account.id)} disabled={syncingId === account.id}>
