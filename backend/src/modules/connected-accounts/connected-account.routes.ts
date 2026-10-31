@@ -3,7 +3,7 @@ import { google } from '../google/google-apis.js'
 import { z } from 'zod'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
-import { syncGoogleDriveInBackground } from '../google/drive-sync.js'
+import { removeImportedDrive, syncGoogleDriveInBackground } from '../google/drive-sync.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { accountLabel } from '../../utils/account-label.js'
@@ -269,6 +269,9 @@ connectedAccountRouter.delete('/:id', requireAuth, async (req: AuthRequest, res,
     const account = await prisma.connectedAccount.findFirst({ where: { id: accountId, userId: req.user!.id } })
     const result = await prisma.connectedAccount.updateMany({ where: { id: accountId, userId: req.user!.id }, data: { status: 'disconnected' } })
     if (result.count > 0 && account) await createAuditLog(req.user!.id, 'DISCONNECT_ACCOUNT', 'account', account.id, { provider: account.provider, accountLabel: accountLabel(account) })
+    // The account's My Drive import goes with it; otherwise its locked 'Drive · email' folder and
+    // everything under it would stay in the app with no way to remove them.
+    if (account?.provider === 'google_drive') await removeImportedDrive(req.user!.id, account.id)
     return res.json({ status: 'ok' })
   } catch (error) {
     return next(error)

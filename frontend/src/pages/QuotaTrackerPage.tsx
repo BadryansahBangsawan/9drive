@@ -372,7 +372,10 @@ export function QuotaTrackerPage() {
         onClose={() => setToDisconnect(null)}
         footer={<><Button variant="secondary" onClick={() => setToDisconnect(null)} disabled={disconnecting}>Cancel</Button><Button variant="danger" onClick={disconnect} disabled={disconnecting}>{disconnecting ? 'Disconnecting...' : 'Disconnect'}</Button></>}
       >
-        <p className="text-[13px] text-muted">This removes the account from 9Drive. Files stored there may no longer be available.</p>
+        <p className="text-[13px] text-muted">
+          This removes the account from 9Drive. Files stored there may no longer be available.
+          {toDisconnect?.provider === 'google_drive' ? ' Its My Drive folder and the files imported from it leave 9Drive too; they stay in Google Drive.' : ''}
+        </p>
         <p className="mt-3 truncate text-[13px] font-medium text-text" title={toDisconnect?.email}>{toDisconnect?.email}</p>
         <p className="mt-0.5 text-[12px] tabular-nums text-muted">Used: {formatBytes(toDisconnect?.storageAccount?.usedBytes)}</p>
       </Dialog>

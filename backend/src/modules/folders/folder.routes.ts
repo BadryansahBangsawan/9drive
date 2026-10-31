@@ -7,6 +7,7 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { HttpError } from '../../middleware/error.middleware.js'
 import { applyDriveChange, driveParentForFolder, getAuthedGoogleClient, ensureGoogleAppFolder, googleDriveFolderMimeType, moveGoogleFile } from '../google/google.service.js'
 import { createAuditLog } from '../../utils/audit.js'
+import { removeImportedDrive } from '../google/drive-sync.js'
 import { defaultFolderColor, defaultFolderIconUrl } from './folder-defaults.js'
 
 export const folderRouter = Router()
@@ -222,7 +223,15 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
     const rootId = String(req.params.id)
     const root = await prisma.folder.findFirstOrThrow({ where: { id: rootId, userId: req.user!.id, deletedAt: null } })
-    if (root.source === 'drive_root') throw new HttpError(400, 'FOLDER_LOCKED', 'This folder stands for a connected Drive account and can’t be deleted.')
+    if (root.source === 'drive_root') {
+      const account = root.connectedAccountId ? await prisma.connectedAccount.findFirst({ where: { id: root.connectedAccountId, userId: req.user!.id } }) : null
+      if (account?.status === 'connected') throw new HttpError(400, 'FOLDER_LOCKED', 'This folder stands for a connected Drive account. Disconnect the account to remove it.')
+      // Left over from an account that is gone or disconnected: remove the whole import.
+      await removeImportedDrive(req.user!.id, root.connectedAccountId ?? '')
+      if (!root.connectedAccountId) await prisma.folder.delete({ where: { id: root.id } })
+      await createAuditLog(req.user!.id, 'DELETE_FOLDER', 'folder', root.id, { name: root.name })
+      return res.json({ status: 'ok' })
+    }
     const folders = await prisma.folder.findMany({ where: { userId: req.user!.id, deletedAt: null }, select: { id: true, parentId: true } })
     const folderIds = new Set<string>([root.id])
     let changed = true

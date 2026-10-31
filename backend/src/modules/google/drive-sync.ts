@@ -209,6 +209,23 @@ export function syncGoogleDrive(accountId: string, userId: string) {
   return run
 }
 
+// Drops what a My Drive import brought into 9drive for this account: the 'Drive · email' folder,
+// the imported folders under it, and the File rows inside them. Only database rows go; the files
+// stay in Google Drive, and a later reconnect imports them again. Files uploaded through 9drive
+// (app root and app folders) are kept. Other accounts' files left inside fall back to the root.
+export async function removeImportedDrive(userId: string, accountId: string) {
+  await running.get(accountId)?.catch(() => undefined)   // let an in-flight import finish first
+  const folders = await prisma.folder.findMany({ where: { userId, connectedAccountId: accountId, source: { in: ['drive', 'drive_root'] } }, select: { id: true } })
+  const folderIds = folders.map((f) => f.id)
+  if (folderIds.length === 0) return { folders: 0, files: 0 }
+  const files = await prisma.file.findMany({ where: { userId, connectedAccountId: accountId, folderId: { in: folderIds } }, select: { id: true } })
+  const fileIds = files.map((f) => f.id)
+  await prisma.workspaceInvite.deleteMany({ where: { inviterId: userId, targetId: { in: [...fileIds, ...folderIds] } } })
+  await prisma.file.deleteMany({ where: { id: { in: fileIds }, userId } })
+  await prisma.folder.deleteMany({ where: { id: { in: folderIds }, userId } })
+  return { folders: folderIds.length, files: fileIds.length }
+}
+
 function logSyncError(accountId: string, error: unknown) {
   console.error('[drive-sync] sync failed', { accountId, message: error instanceof Error ? error.message : String(error) })
 }
