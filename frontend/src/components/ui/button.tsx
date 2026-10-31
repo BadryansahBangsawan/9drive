@@ -12,17 +12,12 @@ const buttonVariants = cva(
         ghost: 'text-muted hover:bg-hover hover:text-text',
         danger: 'bg-danger text-primary-fg hover:opacity-90',
         dangerOutline: 'border border-danger bg-bg text-danger hover:bg-hover',
-        // Aliases kept so pages not yet rebuilt keep compiling.
-        default: 'bg-primary text-primary-fg hover:opacity-90',
-        outline: 'border border-border bg-bg text-text hover:bg-hover',
-        soft: 'border border-border bg-bg text-text hover:bg-hover',
       },
       size: {
         sm: 'h-7 px-2.5',
         md: 'h-8 px-3',
         lg: 'h-9 px-4',
         icon: 'h-8 w-8 p-0',
-        default: 'h-8 px-3',
       },
     },
     defaultVariants: {

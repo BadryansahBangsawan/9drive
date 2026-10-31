@@ -131,7 +131,7 @@ export function SearchFilters({ accounts }: { accounts: ConnectedAccount[] }) {
       </form>
 
       {open && (
-        <div className="fixed inset-x-4 top-16 z-50 max-h-[calc(100dvh-5rem)] overflow-y-auto rounded-xl border border-border bg-bg p-4 sm:absolute sm:inset-x-auto sm:left-auto sm:right-0 sm:top-11 sm:w-[min(28rem,calc(100vw-2rem))]">
+        <div className="fixed inset-x-4 top-16 z-50 max-h-[calc(100dvh-5rem)] overflow-y-auto rounded-xl border border-border bg-bg p-4 shadow-[0_12px_32px_rgba(0,0,0,0.12),0_2px_6px_rgba(0,0,0,0.06)] sm:absolute sm:inset-x-auto sm:left-auto sm:right-0 sm:top-11 sm:w-[min(28rem,calc(100vw-2rem))]">
           <div className="flex items-center justify-between">
             <span className="text-[13px] font-semibold text-text">Filters</span>
             <button type="button" onClick={clear} className="text-xs font-medium text-accent hover:underline">Clear all</button>

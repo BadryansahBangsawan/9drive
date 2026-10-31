@@ -78,7 +78,7 @@ export function Dialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         style={{ width }}
-        className="flex max-h-[calc(100vh-2rem)] max-w-full flex-col rounded-[14px] border border-border bg-bg text-text outline-none"
+        className="flex max-h-[calc(100vh-2rem)] max-w-full flex-col rounded-[14px] border border-border bg-bg text-text shadow-[0_16px_48px_rgba(0,0,0,0.18),0_2px_8px_rgba(0,0,0,0.08)] outline-none"
       >
         <div className="flex items-center justify-between gap-3 px-5 pb-2 pt-4">
           <h2 id={titleId} className="text-[15px] font-semibold">

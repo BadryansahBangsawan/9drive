@@ -184,7 +184,7 @@ export function TrashPage() {
                       <span className="truncate text-[13px] font-medium text-text" title={file.name}>{file.name}</span>
                     </div>
                   </td>
-                  <td className="hidden max-w-[14rem] truncate px-2 text-[13px] text-muted md:table-cell" title={file.folder?.name ?? 'My Drive'}>{file.folder?.name ?? 'My Drive'}</td>
+                  <td className="hidden max-w-[14rem] truncate px-2 text-[13px] text-muted md:table-cell" title={file.folder?.name ?? 'All files'}>{file.folder?.name ?? 'All files'}</td>
                   <td className="px-2 text-right text-[13px] tabular-nums text-muted">{formatBytes(file.sizeBytes)}</td>
                   <td className="px-2 text-right text-[13px] tabular-nums text-muted">{dateFmt.format(new Date(file.deletedAt))}</td>
                 </tr>

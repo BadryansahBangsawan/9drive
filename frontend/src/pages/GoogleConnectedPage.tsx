@@ -13,7 +13,7 @@ export function GoogleConnectedPage() {
     window.opener?.postMessage({ type: 'GOOGLE_CONNECTED', status }, window.location.origin)
     const timer = window.setTimeout(() => {
       if (window.opener) window.close()
-      else navigate('/settings')
+      else navigate('/quota')
     }, 800)
     return () => window.clearTimeout(timer)
   }, [navigate, status])

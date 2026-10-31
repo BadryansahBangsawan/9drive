@@ -85,7 +85,7 @@ export function Menu({
       onKeyDown={onMenuKey}
       onContextMenu={(e) => e.preventDefault()}
       style={{ left: pos.left, top: pos.top }}
-      className="fixed z-50 min-w-[200px] rounded-[10px] border border-border bg-bg p-1 text-text"
+      className="fixed z-50 min-w-[200px] rounded-[10px] border border-border bg-bg p-1 text-text shadow-[0_12px_32px_rgba(0,0,0,0.12),0_2px_6px_rgba(0,0,0,0.06)]"
     >
       {children}
     </div>,

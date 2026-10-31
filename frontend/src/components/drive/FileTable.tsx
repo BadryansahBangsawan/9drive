@@ -19,8 +19,6 @@ export function FileTable({
   onToggleAll,
 }: {
   files: FileItem[]
-  /** Accepted so the not-yet-rebuilt Recent / Starred / Archived pages keep compiling; ignored. */
-  mode?: string
   selectedFileIds?: Set<string>
   detailsFileId?: string | null
   allSelected?: boolean

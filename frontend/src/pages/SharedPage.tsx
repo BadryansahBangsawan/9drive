@@ -4,6 +4,7 @@ import { FileIcon } from '@/components/drive/FileIcon'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Dialog } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Menu, MenuItem } from '@/components/ui/menu'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
@@ -78,6 +79,9 @@ export function SharedPage() {
     return () => window.removeEventListener('9drive:invites-changed', load)
   }, [])
 
+  const [toRevoke, setToRevoke] = useState<Share | null>(null)
+  const [revoking, setRevoking] = useState(false)
+
   async function copyLink(share: Share) {
     if (!share.url) return
     setMessage('')
@@ -91,12 +95,18 @@ export function SharedPage() {
   }
 
   async function revokeLink(share: Share) {
+    if (revoking) return
     setMessage('')
+    setRevoking(true)
     try {
       await apiFetch(`/files/${share.file.id}/share`, { method: 'DELETE' })
       setShares((prev) => prev.filter((s) => s.id !== share.id))
+      setToRevoke(null)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to revoke link')
+      setToRevoke(null)
+    } finally {
+      setRevoking(false)
     }
   }
 
@@ -145,7 +155,7 @@ export function SharedPage() {
                       <span className="truncate">{copiedId === share.id ? 'Copied' : (share.url ?? '').replace(/^https?:\/\//, '')}</span>
                     </button>
                     <span className="w-28 text-[13px] tabular-nums text-muted">{expiryText(share.expiresAt)}</span>
-                    <Button variant="ghost" size="sm" onClick={() => revokeLink(share)}>Revoke</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setToRevoke(share)}>Revoke</Button>
                   </li>
                 ))}
               </ul>
@@ -215,6 +225,21 @@ export function SharedPage() {
       <Menu open={!!menu && !!menuInvite} x={menu?.x ?? 0} y={menu?.y ?? 0} onClose={() => setMenu(null)}>
         <MenuItem danger icon={<X className="h-4 w-4" strokeWidth={1.5} />} onSelect={() => menu && revokeInvite(menu.id)}>Revoke invite</MenuItem>
       </Menu>
+      <Dialog
+        open={toRevoke !== null}
+        onClose={() => { if (!revoking) setToRevoke(null) }}
+        title="Revoke public link?"
+        footer={
+          <>
+            <Button variant="secondary" disabled={revoking} onClick={() => setToRevoke(null)}>Cancel</Button>
+            <Button variant="danger" disabled={revoking} onClick={() => toRevoke && revokeLink(toRevoke)}>{revoking ? 'Revoking…' : 'Revoke link'}</Button>
+          </>
+        }
+      >
+        <p className="text-[13px] text-muted">
+          Anyone with the link to {toRevoke?.file.name ?? 'this file'} will lose access. Sharing it again creates a new link; the old one won't work.
+        </p>
+      </Dialog>
     </>
   )
 }

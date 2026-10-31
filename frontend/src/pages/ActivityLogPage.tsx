@@ -37,7 +37,7 @@ const categoryIcon: Record<ActivityCategory, LucideIcon> = {
 }
 
 function timeOf(value: string) {
-  return new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
+  return new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(value))
 }
 
 export function ActivityLogPage() {

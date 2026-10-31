@@ -80,9 +80,7 @@ function mapFile(file: BackendFile): FileItem {
     accountLabel: label,
     date: formatDate(file.createdAt),
     size: formatBytes(file.sizeBytes),
-    access: label ?? '--',
     kind: mimeToKind(file.mimeType),
-    shared: 1,
     folderId: file.folderId,
     folderName: file.folder?.name,
   }
@@ -189,6 +187,7 @@ export function AllFilesPage() {
   const [filesLoaded, setFilesLoaded] = useState(false)
   // fileId -> expiresAt (null = never) for files with an active public link
   const [shareLinks, setShareLinks] = useState<Map<string, string | null>>(new Map())
+  const [sharesLoaded, setSharesLoaded] = useState(false)
   const [folders, setFolders] = useState<FolderItem[]>([])
   const [allFolders, setAllFolders] = useState<FolderItem[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState('')
@@ -217,7 +216,6 @@ export function AllFilesPage() {
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('viewer')
-  const [inviteTargetType, setInviteTargetType] = useState<'file' | 'folder'>('file')
   const [inviteTargetId, setInviteTargetId] = useState('')
   const [inviteMessage, setInviteMessage] = useState('')
   const [inviting, setInviting] = useState(false)
@@ -258,8 +256,10 @@ export function AllFilesPage() {
     try {
       const data = await apiFetch<{ shares: { expiresAt: string | null; file: { id: string } }[] }>('/files/shared-links')
       setShareLinks(new Map(data.shares.map((share) => [share.file.id, share.expiresAt])))
+      setSharesLoaded(true)
     } catch {
-      // Sharing info is optional; the panel falls back to "Private"
+      // Sharing info is optional; the panel shows an unknown state
+      setSharesLoaded(false)
     }
   }
 
@@ -583,9 +583,13 @@ export function AllFilesPage() {
     if (!file.id) return
     try {
       const shareData = await apiFetch<{ url: string }>(`/files/${file.id}/share`, { method: 'POST' })
-      await navigator.clipboard.writeText(shareData.url)
       loadShares().catch(() => undefined)
-      flash('Share link copied to clipboard.', 2500)
+      try {
+        await navigator.clipboard.writeText(shareData.url)
+        flash('Share link copied to clipboard.', 2500)
+      } catch {
+        flash(`Share link created; copy it manually: ${shareData.url}`, 8000)
+      }
     } catch (err) {
       flash(`Failed to copy link: ${err instanceof Error ? err.message : String(err)}`, 4000)
       throw err
@@ -596,8 +600,12 @@ export function AllFilesPage() {
     if (!file.id) return
     try {
       const res = await apiFetch<{ url: string }>(`/files/${file.id}/public-permission`, { method: 'POST' })
-      await navigator.clipboard.writeText(res.url)
-      flash('Google Drive link copied. Anyone with the link can now view this file.', 5000)
+      try {
+        await navigator.clipboard.writeText(res.url)
+        flash('Google Drive link copied. Anyone with the link can now view this file.', 5000)
+      } catch {
+        flash(`File is now public on Google Drive; copy the link manually: ${res.url}`, 8000)
+      }
     } catch (err) {
       flash(`Failed to update Google Drive permission: ${err instanceof Error ? err.message : String(err)}`, 5000)
     }
@@ -605,7 +613,6 @@ export function AllFilesPage() {
 
   function inviteToFolder() {
     if (!activeFolderForMenu?.id) return
-    setInviteTargetType('folder')
     setInviteTargetId(activeFolderForMenu.id)
     setInviteMessage('')
     setInviteOpen(true)
@@ -627,7 +634,7 @@ export function AllFilesPage() {
     setInviting(true)
     setInviteMessage('')
     try {
-      await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email: inviteEmail, role: inviteRole, targetType: inviteTargetType, targetId: inviteTargetId }) })
+      await apiFetch('/invites', { method: 'POST', body: JSON.stringify({ email: inviteEmail, role: inviteRole, targetType: 'folder', targetId: inviteTargetId }) })
       setInviteEmail('')
       setInviteRole('viewer')
       setInviteMessage('Invite saved. Member will appear in Shared.')
@@ -711,7 +718,8 @@ export function AllFilesPage() {
   const activePreviewKind = getPreviewKind(activeFile?.mimeType)
   const detailsFile = files.find((file) => file.id === detailsFileId) ?? null
   const detailsSharing = (() => {
-    if (!detailsFile?.id || !shareLinks.has(detailsFile.id)) return 'Private'
+    if (!detailsFile?.id || !sharesLoaded) return '—'
+    if (!shareLinks.has(detailsFile.id)) return 'Private'
     const expires = shareLinks.get(detailsFile.id)
     return expires ? `Public link · expires ${new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(expires))}` : 'Public link'
   })()

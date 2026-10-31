@@ -100,7 +100,7 @@ export function DriveLayout() {
       </div>
 
       <div
-        className={cn('fixed inset-0 z-40 bg-text/40 transition-opacity lg:hidden', drawerOpen ? 'opacity-100' : 'pointer-events-none opacity-0')}
+        className={cn('fixed inset-0 z-40 bg-black/45 transition-opacity lg:hidden', drawerOpen ? 'opacity-100' : 'pointer-events-none opacity-0')}
         onClick={() => setDrawerOpen(false)}
         aria-hidden="true"
       />

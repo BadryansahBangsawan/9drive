@@ -36,7 +36,7 @@ function startOfDay(d: Date) {
 function timeLabel(createdAt: string, now: Date) {
   const date = new Date(createdAt)
   const days = Math.round((startOfDay(now) - startOfDay(date)) / DAY)
-  const clock = new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date)
+  const clock = new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date)
   if (days <= 1) return `Uploaded ${clock}`
   return `Uploaded ${new Intl.DateTimeFormat('en', { weekday: 'short' }).format(date)} ${clock}`
 }
@@ -102,7 +102,7 @@ export function RecentPage() {
                       {file.connectedAccount ? (
                         <StoredIn provider={file.connectedAccount.provider} label={accountLabel(file.connectedAccount)} />
                       ) : (
-                        <span className="truncate">{file.folder?.name ?? 'My Drive'}</span>
+                        <span className="truncate">{file.folder?.name ?? 'All files'}</span>
                       )}
                     </span>
                     <span className="hidden w-20 text-right text-[13px] tabular-nums text-muted sm:block">{formatBytes(file.sizeBytes)}</span>

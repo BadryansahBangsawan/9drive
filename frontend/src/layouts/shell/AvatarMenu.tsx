@@ -22,6 +22,7 @@ export function AvatarMenu({ user, onLogout }: { user: AuthUser | null; onLogout
 
   function toggle() {
     if (pos) return setPos(null)
+    setPref(getThemePreference())
     const rect = buttonRef.current?.getBoundingClientRect()
     if (rect) setPos({ x: rect.right - MENU_WIDTH, y: rect.bottom + 6 })
   }

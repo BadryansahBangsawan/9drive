@@ -2,7 +2,7 @@ import { createContext, useContext, useState, type ReactNode } from 'react'
 import { API_URL, apiFetch, refreshAccessToken } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 
-export type UploadProgressStatus = 'uploading' | 'done' | 'error' | 'partial'
+export type UploadProgressStatus = 'queued' | 'uploading' | 'done' | 'error' | 'partial'
 export type UploadProgressFile = { name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string }
 export type UploadProgressState = { open: boolean; fileName: string; percent: number; status: UploadProgressStatus; files: UploadProgressFile[] }
 
@@ -162,12 +162,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       fileName: filesToUpload.length === 1 ? filesToUpload[0].name : `${filesToUpload.length} files`,
       percent: 0,
       status: 'uploading',
-      files: filesToUpload.map(f => ({ name: f.name, size: f.size, percent: 0, status: 'uploading' }))
+      files: filesToUpload.map((f, idx) => ({ name: f.name, size: f.size, percent: 0, status: idx === 0 ? 'uploading' : 'queued' }))
     })
 
     // Upload files sequentially
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i]
+      setUploadProgress((current) => {
+        const nextFiles = [...current.files]
+        if (nextFiles[i] && nextFiles[i].status === 'queued') nextFiles[i] = { ...nextFiles[i], status: 'uploading' }
+        return { ...current, files: nextFiles }
+      })
       try {
         await uploadSingleFileResumable(file, targetFolderId, (filePercent) => {
           setUploadProgress((current) => {

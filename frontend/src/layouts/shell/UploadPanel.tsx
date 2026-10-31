@@ -25,7 +25,7 @@ export function UploadPanel() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed inset-x-3 bottom-3 z-[70] overflow-hidden rounded-xl border border-border bg-bg sm:inset-x-auto sm:bottom-5 sm:right-5 sm:w-[360px]"
+      className="fixed inset-x-3 bottom-3 z-[70] overflow-hidden rounded-xl border border-border bg-bg shadow-[0_12px_32px_rgba(0,0,0,0.12),0_2px_6px_rgba(0,0,0,0.06)] sm:inset-x-auto sm:bottom-5 sm:right-5 sm:w-[360px]"
     >
       <div className="flex h-11 items-center justify-between border-b border-border pl-4 pr-2">
         <span className={cn('text-[13px] font-medium', !uploading && failed ? 'text-danger' : 'text-text')}>{title}</span>
@@ -45,7 +45,9 @@ export function UploadPanel() {
               <FileIcon className="h-4 w-4 shrink-0 text-muted" strokeWidth={1.5} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] text-text" title={file.name}>{file.name}</p>
-                {file.status === 'uploading' ? (
+                {file.status === 'queued' ? (
+                  <p className="truncate text-xs tabular-nums text-muted">{formatBytes(file.size)} · Waiting</p>
+                ) : file.status === 'uploading' ? (
                   <>
                     <p className="truncate text-xs tabular-nums text-muted">
                       {formatBytes(file.size)}{file.accountLabel ? ` · to ${file.accountLabel}` : ''}

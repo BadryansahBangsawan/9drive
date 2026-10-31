@@ -26,23 +26,9 @@ export function getThemePreference(): ThemePreference {
   return 'system'
 }
 
-const listeners = new Set<(theme: 'light' | 'dark') => void>()
-
-export function getAppliedTheme(): 'light' | 'dark' {
-  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
-}
-
-export function onThemeChange(cb: (theme: 'light' | 'dark') => void): () => void {
-  listeners.add(cb)
-  return () => {
-    listeners.delete(cb)
-  }
-}
-
 function applyTheme(pref: ThemePreference) {
   const resolved = resolveTheme(pref, systemPrefersDark())
   document.documentElement.classList.toggle('dark', resolved === 'dark')
-  listeners.forEach((cb) => cb(resolved))
 }
 
 export function setThemePreference(pref: ThemePreference): void {
