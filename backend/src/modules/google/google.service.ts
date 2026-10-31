@@ -90,6 +90,22 @@ export async function ensureGoogleAppFolder(account: ConnectedAccount) {
   return folderId
 }
 
+// Moves a Drive file so `targetParentId` is its only parent. No-op when it already is.
+export async function moveGoogleFile(account: ConnectedAccount, providerFileId: string, targetParentId: string) {
+  const auth = await getAuthedGoogleClient(account)
+  const drive = google.drive({ version: 'v3', auth })
+  const current = await drive.files.get({ fileId: providerFileId, fields: 'parents' })
+  const parents = current.data.parents ?? []
+  if (parents.length === 1 && parents[0] === targetParentId) return
+  const removeParents = parents.filter((id) => id !== targetParentId).join(',')
+  await drive.files.update({
+    fileId: providerFileId,
+    addParents: parents.includes(targetParentId) ? undefined : targetParentId,
+    removeParents: removeParents || undefined,
+    fields: 'id',
+  })
+}
+
 export type GoogleAppFolderSyncResult = {
   accountId: string
   created: number
@@ -112,10 +128,12 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   const appFolderId = await ensureGoogleAppFolder(account)
 
   // Include app-deleted folders: their Drive folders still exist and may hold files restored from Trash.
-  const userFolders = await prisma.folder.findMany({
-    where: { userId, connectedAccountId: account.id },
-    select: { id: true, providerFolderId: true, deletedAt: true }
+  const allFolders = await prisma.folder.findMany({
+    where: { userId },
+    select: { id: true, connectedAccountId: true, providerFolderId: true, deletedAt: true }
   })
+  const folderById = new Map(allFolders.map((f) => [f.id, f]))
+  const userFolders = allFolders.filter((f) => f.connectedAccountId === account.id)
   const parentIds = [
     appFolderId,
     ...userFolders.map((f) => f.providerFolderId).filter((id): id is string => !!id)
@@ -152,9 +170,19 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
 
   const folderIdMap = new Map(userFolders.filter((f) => !f.deletedAt).map((f) => [f.providerFolderId, f.id]))
 
+  // In-app moves also move the Drive file when the target folder has a Drive mirror on this
+  // account, so the Drive parent is the source of truth. A placement Drive can't represent
+  // (folder bound to another account, or without a Drive mirror) is app-side only: keep it.
+  const keepsAppFolder = (folderId: string | null) => {
+    if (!folderId) return false
+    const folder = folderById.get(folderId)
+    return !!folder && !folder.deletedAt && (folder.connectedAccountId !== account.id || !folder.providerFolderId)
+  }
+
   for (const driveFile of driveFiles) {
-    const dbFolderId = driveFile.parentId === appFolderId ? null : (folderIdMap.get(driveFile.parentId) ?? null)
     const existing = existingByProviderId.get(driveFile.id)
+    const driveFolderId = driveFile.parentId === appFolderId ? null : (folderIdMap.get(driveFile.parentId) ?? null)
+    const dbFolderId = existing && keepsAppFolder(existing.folderId) ? existing.folderId : driveFolderId
     if (!existing) {
       await prisma.file.create({
         data: { userId, connectedAccountId: account.id, provider: 'google_drive', providerFileId: driveFile.id, name: driveFile.name, mimeType: driveFile.mimeType, sizeBytes: driveFile.sizeBytes, status: 'active', folderId: dbFolderId },

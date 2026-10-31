@@ -6,7 +6,8 @@ import { env } from '../../config/env.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { hashToken, randomToken } from '../../utils/crypto.js'
 import { shareExpiresAt } from '../../utils/share-expiry.js'
-import { getAuthedGoogleClient, syncGoogleAppFolderFiles, syncGoogleQuota } from '../google/google.service.js'
+import type { ConnectedAccount, File, Folder } from '@prisma/client'
+import { ensureGoogleAppFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleAppFolderFiles, syncGoogleQuota } from '../google/google.service.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile } from './stream-file.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from './stream-google-file.js'
@@ -94,13 +95,46 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
 const batchFileSchema = z.object({ fileIds: z.array(z.string().min(1)).min(1).max(100) })
 const shareBodySchema = z.object({ expiresIn: z.enum(['never', '1d', '7d', '30d']).optional() })
 
+// Mirrors an in-app move on Drive so `POST /files/sync-google` doesn't undo it. Only possible when
+// the target folder has a Drive mirror on the file's account (or is the root `9drive` folder);
+// otherwise the move stays app-side and sync leaves `folderId` alone.
+function createDriveMover() {
+  const appFolderIds = new Map<string, Promise<string>>()
+  return async (file: File & { connectedAccount: ConnectedAccount }, folder: Folder | null) => {
+    if (file.provider !== 'google_drive') return
+    if (folder && (folder.connectedAccountId !== file.connectedAccountId || !folder.providerFolderId)) return
+    let parentId = folder?.providerFolderId
+    if (!parentId) {
+      if (!appFolderIds.has(file.connectedAccountId)) appFolderIds.set(file.connectedAccountId, ensureGoogleAppFolder(file.connectedAccount))
+      parentId = await appFolderIds.get(file.connectedAccountId)!
+    }
+    await moveGoogleFile(file.connectedAccount, file.providerFileId, parentId)
+  }
+}
+
 fileRouter.patch('/batch', async (req: AuthRequest, res, next) => {
   try {
     const body = batchFileSchema.extend({ folderId: z.string().nullable().optional() }).parse(req.body)
-    if (body.folderId) await prisma.folder.findFirstOrThrow({ where: { id: body.folderId, userId: req.user!.id, deletedAt: null } })
-    const result = await prisma.file.updateMany({ where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'active' }, data: { folderId: body.folderId ?? null } })
+    const targetFolderId = body.folderId ?? null
+    const targetFolder = targetFolderId ? await prisma.folder.findFirstOrThrow({ where: { id: targetFolderId, userId: req.user!.id, deletedAt: null } }) : null
+    const files = await prisma.file.findMany({ where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'active' }, include: { connectedAccount: true } })
+    const moveOnDrive = createDriveMover()
+    const movedIds: string[] = []
+    const failed: Array<{ fileId: string; message: string }> = []
+    for (const file of files) {
+      try {
+        if (file.folderId !== targetFolderId) await moveOnDrive(file, targetFolder)
+        movedIds.push(file.id)
+      } catch (error) {
+        failed.push({ fileId: file.id, message: error instanceof Error ? error.message : 'Move failed' })
+      }
+    }
+    const result = await prisma.file.updateMany({ where: { id: { in: movedIds }, userId: req.user!.id, status: 'active' }, data: { folderId: targetFolderId } })
     await createAuditLog(req.user!.id, 'MOVE_FILES', 'file', undefined, { count: result.count, folderId: body.folderId })
-    return res.json({ status: 'ok', moved: result.count })
+    if (movedIds.length === 0 && failed.length > 0) {
+      return res.status(400).json({ code: 'FILES_MOVE_FAILED', message: 'No files were moved.', moved: 0, failed })
+    }
+    return res.json({ status: 'ok', moved: result.count, failed })
   } catch (error) {
     return next(error)
   }
@@ -276,8 +310,9 @@ fileRouter.patch('/:id', async (req: AuthRequest, res, next) => {
     const fileId = String(req.params.id)
     const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id }, include: { connectedAccount: true } })
     const drive = file.provider === 's3' ? null : google.drive({ version: 'v3', auth: await getAuthedGoogleClient(file.connectedAccount) })
-    if (body.folderId) await prisma.folder.findFirstOrThrow({ where: { id: body.folderId, userId: req.user!.id, deletedAt: null } })
+    const targetFolder = body.folderId ? await prisma.folder.findFirstOrThrow({ where: { id: body.folderId, userId: req.user!.id, deletedAt: null } }) : null
     if (body.name && drive) await drive.files.update({ fileId: file.providerFileId, requestBody: { name: body.name } })
+    if (body.folderId !== undefined && (body.folderId ?? null) !== file.folderId) await createDriveMover()(file, targetFolder)
     const updated = await prisma.file.update({ where: { id: file.id }, data: { ...(body.name ? { name: body.name } : {}), ...(body.folderId !== undefined ? { folderId: body.folderId } : {}) }, include: { connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } }, folder: { select: { id: true, name: true } } } })
     await createAuditLog(req.user!.id, 'UPDATE_FILE', 'file', updated.id, { name: updated.name, updates: body })
     return res.json({ file: { ...updated, sizeBytes: updated.sizeBytes.toString() } })

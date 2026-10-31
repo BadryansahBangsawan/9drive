@@ -35,7 +35,9 @@ Other scripts that `AGENTS.md` doesn't list:
 
 `handleUpload` is shared with the external API, mounted as `POST /api/v1/uploads` (`modules/public-api`). That route is guarded by `requireApiKey('files:upload')` in `middleware/api-key.middleware.ts`, not by `requireAuth`. API keys are stored hashed and carry scopes.
 
-**Virtual vs physical.** Folders exist only in MySQL (`Folder.parentId` tree). Files are stored flat in the provider's `9drive` folder or prefix. `File.folderId` is purely app-side. Folders and files are soft-deleted (`deletedAt`/`status`), which is what the Trash and Archived pages rely on.
+**Virtual vs physical.** Folders live in MySQL (`Folder.parentId` tree). When a Google account is connected, each folder also gets a Drive mirror under `9drive` (`Folder.providerFolderId`, bound to `Folder.connectedAccountId`), and Drive uploads into that folder go into the mirror. S3 objects are stored flat under the prefix. Folders and files are soft-deleted (`deletedAt`/`status`), which is what the Trash and Archived pages rely on.
+
+**Moves vs Google sync.** `PATCH /files/:id` and `PATCH /files/batch` also move the Drive file (`moveGoogleFile`) when the target folder has a Drive mirror on the file's account, or to the `9drive` root when moving to root. Otherwise the move is app-side only. `syncGoogleAppFolderFiles` treats the Drive parent as the source of truth for `folderId`, except when the file's current folder can't be represented on Drive (bound to another account, or no mirror); then it keeps the app-side `folderId`.
 
 **Google OAuth config comes from the DB, not env.** `env.ts` doesn't read `GOOGLE_*`. Those vars are read only by the seed scripts, which write a global `ProviderConfig` row (`userId` null) with encrypted credentials. It can also be set in Settings via `POST /system/google-config`. In Docker, `seed:google-config:docker` skips seeding when the credentials are blank or placeholders.
 
