@@ -681,7 +681,8 @@ export function AllFilesPage() {
     }
     window.addEventListener('9drive:upload-completed', handleUploadCompleted)
     return () => window.removeEventListener('9drive:upload-completed', handleUploadCompleted)
-  }, [activeFolderId])
+    // loadAll closes over the current folder, search and filters, so re-subscribe when any change.
+  }, [activeFolderId, searchQuery, filterKey])
 
   const activeFolder = allFolders.find((folder) => folder.id === activeFolderId)
   const folderBreadcrumbs = (() => {

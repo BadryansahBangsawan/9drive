@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
-import { API_URL, apiFetch } from '@/lib/api'
+import { API_URL, apiFetch, refreshAccessToken } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 
 export type UploadProgressStatus = 'uploading' | 'done' | 'error' | 'partial'
@@ -28,7 +28,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const [resumableSessions, setResumableSessions] = useState<Record<string, ResumableSession>>({})
 
   function uploadSingleFileMultipart(file: File, folderId: string | null, accountId: string | null, onProgress: (percent: number) => void) {
-    return new Promise<void>((resolve, reject) => {
+    const attempt = () => new Promise<void>((resolve, reject) => {
       const form = new FormData()
       // Text fields go before the file so the server can read them while streaming.
       form.append('sizeBytes', String(file.size))
@@ -48,13 +48,31 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         if (xhr.status >= 200 && xhr.status < 300) {
           onProgress(100)
           resolve()
-        } else {
-          reject(new Error(`Upload failed (${xhr.status})`))
+          return
         }
+        let message = `Upload failed (${xhr.status})`
+        try {
+          const body = JSON.parse(xhr.responseText) as { message?: string; failed?: { message?: string }[] }
+          message = body.failed?.[0]?.message || body.message || message
+        } catch {
+          // non-JSON error body; keep the status text
+        }
+        const error = new Error(message) as Error & { status?: number }
+        error.status = xhr.status
+        reject(error)
       }
       xhr.onerror = () => reject(new Error('Upload failed'))
       xhr.onabort = () => reject(new Error('Upload cancelled'))
       xhr.send(form)
+    })
+
+    return attempt().catch(async (error: Error & { status?: number }) => {
+      // Expired access token: refresh once and retry the whole request.
+      if (error.status === 401 && (await refreshAccessToken())) {
+        onProgress(0)
+        return attempt()
+      }
+      throw error
     })
   }
 
