@@ -88,6 +88,7 @@ export function QuotaTrackerPage() {
       apiFetch<{ policy: RoutingPolicy }>('/storage/routing-policy'),
     ])
     setAccounts(accountData.accounts)
+    setLoadFailed(false)
     setPolicy({ mode: policyData.policy.mode, priorityAccountIds: policyData.policy.priorityAccountIds })
   }
 
@@ -281,7 +282,7 @@ export function QuotaTrackerPage() {
               {accounts.map((account) => {
                 const percent = usedPercent(account)
                 const danger = percent !== null && percent >= DANGER_THRESHOLD
-                const unlimited = account.provider === 's3' && account.storageAccount?.totalBytes === null
+                const unlimited = account.storageAccount?.totalBytes == null
                 return (
                   <div key={account.id} className="flex items-center gap-3 px-4 py-3">
                     <ProviderTile provider={account.provider} />
