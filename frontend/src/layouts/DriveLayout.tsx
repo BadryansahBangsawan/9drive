@@ -1,7 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom'
 import { apiFetch } from '@/lib/api'
-import { clearAuthSession, getStoredUser, updateStoredUser, type AuthUser } from '@/lib/auth'
+import { logout } from '@/lib/session'
+import { getStoredUser, updateStoredUser, type AuthUser } from '@/lib/auth'
 import type { ConnectedAccount } from '@/lib/accounts'
 import { cn } from '@/lib/utils'
 import { Sidebar } from './shell/Sidebar'
@@ -88,10 +89,8 @@ export function DriveLayout() {
     return () => window.removeEventListener('keydown', onKey)
   }, [drawerOpen])
 
-  async function logout() {
-    await apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined)
-    clearAuthSession()
-    navigate('/login')
+  function handleLogout() {
+    return logout(navigate)
   }
 
   return (
@@ -122,7 +121,7 @@ export function DriveLayout() {
           accounts={accounts}
           user={user}
           onOpenMenu={() => setDrawerOpen(true)}
-          onLogout={logout}
+          onLogout={handleLogout}
         />
         <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 lg:p-7">
           <Outlet context={{ setHeaderActions, setBreadcrumb, openUpload } satisfies DriveLayoutContext} />

@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Segmented } from '@/components/ui/segmented'
 import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
@@ -16,6 +17,22 @@ const curlExample = `curl -X POST "${API_URL}/api/v1/uploads" \\
   -F 'filesMeta=[{"fieldName":"file-0","fileName":"hello.txt","mimeType":"text/plain","sizeBytes":"12"}]' \\
   -F "file-0=@hello.txt;type=text/plain"`
 
+const jsExample = `const form = new FormData()
+form.append('filesMeta', JSON.stringify([
+  { fieldName: 'file-0', fileName: file.name, mimeType: file.type, sizeBytes: String(file.size) },
+]))
+form.append('file-0', file)
+
+await fetch('${API_URL}/api/v1/uploads', {
+  method: 'POST',
+  headers: { Authorization: 'Bearer 9d_live_xxx' },
+  body: form,
+})`
+
+function CopyIcon({ active }: { active: boolean }) {
+  return active ? <Check className="h-4 w-4" strokeWidth={1.5} /> : <Copy className="h-4 w-4" strokeWidth={1.5} />
+}
+
 export function ApiManagementPage() {
   const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
@@ -27,6 +44,9 @@ export function ApiManagementPage() {
   const [message, setMessage] = useState('')
   const [copied, setCopied] = useState('')
   const [loading, setLoading] = useState(false)
+  const [lang, setLang] = useState<'curl' | 'js'>('curl')
+  const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null)
+  const [revoking, setRevoking] = useState(false)
 
   async function load() {
     const data = await apiFetch<{ apiKeys: ApiKey[] }>('/api-keys')
@@ -59,12 +79,18 @@ export function ApiManagementPage() {
     }
   }
 
-  async function revokeKey(id: string) {
+  async function revokeKey() {
+    if (!revokeTarget) return
+    setRevoking(true)
     try {
-      await apiFetch(`/api-keys/${id}`, { method: 'DELETE' })
+      await apiFetch(`/api-keys/${revokeTarget.id}`, { method: 'DELETE' })
+      setRevokeTarget(null)
       await load()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to revoke API key')
+      setRevokeTarget(null)
+    } finally {
+      setRevoking(false)
     }
   }
 
@@ -75,7 +101,7 @@ export function ApiManagementPage() {
     }).catch(() => setMessage('Failed to copy.'))
   }
 
-  const CopyIcon = ({ id }: { id: string }) => (copied === id ? <Check className="h-4 w-4" strokeWidth={1.5} /> : <Copy className="h-4 w-4" strokeWidth={1.5} />)
+  const example = lang === 'curl' ? curlExample : jsExample
   const newKeyButton = <Button onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" strokeWidth={1.5} />Create key</Button>
 
   return (
@@ -89,7 +115,7 @@ export function ApiManagementPage() {
           <p className="mt-0.5 text-[13px] text-muted">This is the only time it is shown. Store it somewhere safe.</p>
           <div className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row">
             <code className="block min-w-0 flex-1 overflow-x-auto rounded-lg border border-border bg-bg px-3 py-2 font-mono text-[13px] text-text">{secret}</code>
-            <Button onClick={() => copy('secret', secret)}><CopyIcon id="secret" />{copied === 'secret' ? 'Copied' : 'Copy'}</Button>
+            <Button onClick={() => copy('secret', secret)}><CopyIcon active={copied === 'secret'} />{copied === 'secret' ? 'Copied' : 'Copy'}</Button>
             <Button variant="ghost" onClick={() => setSecret('')}>Dismiss</Button>
           </div>
         </div>
@@ -129,7 +155,7 @@ export function ApiManagementPage() {
                   <td className="px-4 text-right">
                     <button
                       type="button"
-                      onClick={() => revokeKey(apiKey.id)}
+                      onClick={() => setRevokeTarget(apiKey)}
                       disabled={apiKey.status === 'revoked'}
                       className="rounded-md px-2 py-1 text-[13px] font-medium text-danger transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:pointer-events-none disabled:opacity-40"
                     >
@@ -149,10 +175,28 @@ export function ApiManagementPage() {
             <h2 className="text-sm font-semibold text-text">Quick start</h2>
             <p className="mt-0.5 text-[13px] text-muted">Upload a file with <span className="font-mono text-xs">POST /api/v1/uploads</span> and your key as a Bearer token.</p>
           </div>
-          <Button variant="secondary" size="sm" onClick={() => copy('curl', curlExample)}><CopyIcon id="curl" />{copied === 'curl' ? 'Copied' : 'Copy'}</Button>
+          <div className="flex items-center gap-2">
+            <Segmented<'curl' | 'js'> value={lang} onChange={setLang} options={[{ value: 'curl', label: 'cURL' }, { value: 'js', label: 'JavaScript' }]} />
+            <Button variant="secondary" size="sm" onClick={() => copy('example', example)}><CopyIcon active={copied === 'example'} />{copied === 'example' ? 'Copied' : 'Copy'}</Button>
+          </div>
         </div>
-        <pre className="mt-3 max-w-full overflow-auto rounded-[10px] border border-border bg-surface p-4 font-mono text-xs leading-relaxed text-text">{curlExample}</pre>
+        <pre className="mt-3 max-w-full overflow-auto rounded-[10px] border border-border bg-surface p-4 font-mono text-xs leading-relaxed text-text">{example}</pre>
       </section>
+
+      <Dialog
+        open={revokeTarget !== null}
+        title="Revoke this key?"
+        width={400}
+        onClose={() => { if (!revoking) setRevokeTarget(null) }}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRevokeTarget(null)} disabled={revoking}>Cancel</Button>
+            <Button variant="danger" onClick={revokeKey} disabled={revoking}>{revoking ? 'Revoking...' : 'Revoke'}</Button>
+          </>
+        }
+      >
+        <p className="text-[13px] text-muted">Revoke this key? Apps using it will stop working.</p>
+      </Dialog>
 
       <Dialog
         open={createOpen}

@@ -9,7 +9,8 @@ import { Segmented } from '@/components/ui/segmented'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 import { apiFetch } from '@/lib/api'
-import { clearAuthSession, getStoredUser } from '@/lib/auth'
+import { getStoredUser, updateStoredUser, type AuthUser } from '@/lib/auth'
+import { logout } from '@/lib/session'
 import { getGravatarUrl } from '@/lib/gravatar'
 import { getThemePreference, setThemePreference, type ThemePreference } from '@/lib/theme'
 
@@ -39,7 +40,7 @@ function Field({ label, hint, children }: { label: string; hint?: ReactNode; chi
 }
 
 export function SettingsPage() {
-  const user = getStoredUser()
+  const [user, setUser] = useState<AuthUser | null>(getStoredUser)
   const navigate = useNavigate()
   const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
   const [themePref, setThemePref] = useState<ThemePreference>(getThemePreference)
@@ -177,18 +178,19 @@ export function SettingsPage() {
   useEffect(() => {
     setBreadcrumb([{ label: 'Settings' }])
     setHeaderActions(null)
+    // Stored sessions from before roles existed have no role; refresh it so admins see their sections.
+    apiFetch<{ user: AuthUser }>('/auth/me')
+      .then((data) => {
+        updateStoredUser(data.user)
+        setUser(data.user)
+      })
+      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
     setAvatarError(false)
     getGravatarUrl(user?.email, 96).then(setProfileImageUrl).catch(() => setProfileImageUrl(''))
   }, [user?.email])
-
-  async function logout() {
-    await apiFetch('/auth/logout', { method: 'POST' }).catch(() => undefined)
-    clearAuthSession()
-    navigate('/login')
-  }
 
   function closeUpdateDialog() {
     if (!updateFinished && !confirm('The update is still running in the background. Close log viewer?')) return
@@ -218,7 +220,7 @@ export function SettingsPage() {
               <p className="truncate text-sm font-semibold text-text">{user?.name ?? 'User'}</p>
               <p className="truncate text-[13px] text-muted">{user?.email ?? '-'}{user?.role ? ` · ${user.role === 'admin' ? 'Admin' : 'User'}` : ''}</p>
             </div>
-            <Button variant="secondary" onClick={logout}><LogOut className="h-4 w-4" strokeWidth={1.5} />Sign out</Button>
+            <Button variant="secondary" onClick={() => logout(navigate)}><LogOut className="h-4 w-4" strokeWidth={1.5} />Sign out</Button>
           </div>
         </Section>
 
