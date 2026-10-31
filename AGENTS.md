@@ -90,7 +90,7 @@ Security rules:
 - Google tokens are encrypted before database storage.
 - App refresh tokens are hashed before database storage.
 - Auth handoff, share, and preview tokens are stored as hashes where applicable.
-- Uploaded files must stream through backend to Google Drive folder `9drive`; do not store uploaded files on disk.
+- Uploaded files must stream through the backend to Google Drive; do not store uploaded files on disk. They land in the account's `9drive` folder, or in the target folder's Drive counterpart on the same account (an app folder's mirror under `9drive`, or an imported My Drive folder). Resolve the Drive parent with `driveParentForFolder` (`modules/google/google.service.ts`).
 - Keep CORS restricted by `FRONTEND_URL`.
 - Never grant `anyone` permissions on Drive files automatically; public Drive access is an explicit user action.
 - Serve stored files through `setFileResponseHeaders` (`modules/files/file-response.ts`) so user content cannot run as a page on the app origin.
@@ -232,7 +232,7 @@ Uploads:
 - Current frontend sends metadata first as `filesMeta`: JSON array of `{ fieldName, fileName, mimeType, sizeBytes, folderId? }`.
 - File fields then match `filesMeta[*].fieldName`, e.g. `file-0`, `file-1`.
 - Backend selects a connected Drive account with enough available quota and streams each file directly to Google Drive.
-- Google Drive uploads are placed under the root Drive folder named `9drive`; virtual folders remain app/database-only.
+- Google Drive uploads are placed under the root Drive folder named `9drive`, unless the target folder has a Drive counterpart on the chosen account (its mirror under `9drive`, or an imported My Drive folder); then they go there.
 - `POST /files/sync-google` imports each connected account's whole My Drive: the `9drive` folder is the app root, everything else appears under a per-account `Drive · email` folder. It creates missing MySQL rows, updates changed metadata/placement, and marks missing Drive files as deleted. See CLAUDE.md "Google Drive import".
 
 ## Docker

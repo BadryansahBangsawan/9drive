@@ -6,7 +6,7 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { hashToken, randomToken } from '../../utils/crypto.js'
 import { shareExpiresAt } from '../../utils/share-expiry.js'
 import type { ConnectedAccount, File, Folder } from '@prisma/client'
-import { ensureGoogleAppFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleQuota } from '../google/google.service.js'
+import { driveParentForFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleQuota } from '../google/google.service.js'
 import { syncGoogleDrive } from '../google/drive-sync.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile } from './stream-file.js'
@@ -106,13 +106,8 @@ function createDriveMover() {
   const appFolderIds = new Map<string, Promise<string>>()
   return async (file: File & { connectedAccount: ConnectedAccount }, folder: Folder | null) => {
     if (file.provider !== 'google_drive') return
-    if (folder && (folder.connectedAccountId !== file.connectedAccountId || !folder.providerFolderId)) return
-    let parentId = folder?.providerFolderId
-    if (!parentId) {
-      if (!appFolderIds.has(file.connectedAccountId)) appFolderIds.set(file.connectedAccountId, ensureGoogleAppFolder(file.connectedAccount))
-      parentId = await appFolderIds.get(file.connectedAccountId)!
-    }
-    await moveGoogleFile(file.connectedAccount, file.providerFileId, parentId)
+    const parentId = await driveParentForFolder(file.connectedAccount, folder, appFolderIds)
+    if (parentId) await moveGoogleFile(file.connectedAccount, file.providerFileId, parentId)
   }
 }
 

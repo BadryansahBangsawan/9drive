@@ -1,5 +1,5 @@
 import { google } from './google-apis.js'
-import type { ConnectedAccount, ProviderConfig } from '@prisma/client'
+import type { ConnectedAccount, Folder, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'
 
@@ -88,6 +88,18 @@ export async function ensureGoogleAppFolder(account: ConnectedAccount) {
 
   if (!folderId) throw new Error('Failed to create Google Drive app folder.')
   return folderId
+}
+
+// The Drive folder that stands for a 9drive folder on `account`, or null when the folder has no
+// Drive counterpart there (it is bound to another account, or has no Drive mirror). The app root
+// (folder null) is the account's `9drive` folder. Pass `appFolderCache` to reuse the 9drive folder
+// lookup across a batch.
+// This is the one rule for uploads, file moves and folder moves; sync relies on it too.
+export async function driveParentForFolder(account: ConnectedAccount, folder: Pick<Folder, 'connectedAccountId' | 'providerFolderId'> | null, appFolderCache?: Map<string, Promise<string>>) {
+  if (folder) return folder.connectedAccountId === account.id && folder.providerFolderId ? folder.providerFolderId : null
+  if (!appFolderCache) return ensureGoogleAppFolder(account)
+  if (!appFolderCache.has(account.id)) appFolderCache.set(account.id, ensureGoogleAppFolder(account))
+  return appFolderCache.get(account.id)!
 }
 
 // Moves a Drive file so `targetParentId` is its only parent. No-op when it already is.

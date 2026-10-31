@@ -5,7 +5,7 @@ import type { Folder } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { HttpError } from '../../middleware/error.middleware.js'
-import { getAuthedGoogleClient, ensureGoogleAppFolder, googleDriveFolderMimeType, moveGoogleFile } from '../google/google.service.js'
+import { driveParentForFolder, getAuthedGoogleClient, ensureGoogleAppFolder, googleDriveFolderMimeType, moveGoogleFile } from '../google/google.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { defaultFolderColor, defaultFolderIconUrl } from './folder-defaults.js'
 
@@ -182,10 +182,12 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
       if (descendantIds.has(body.parentId)) return res.status(400).json({ code: 'FOLDER_INVALID_PARENT', message: 'Folder cannot be moved into itself or a child folder.' })
     }
 
-    // A folder with a Drive mirror can only go where Drive can follow: a folder on the same
-    // account, or the app root (that account's 9drive folder).
-    if (moving && folderRecord.providerFolderId && newParent && (newParent.connectedAccountId !== folderRecord.connectedAccountId || !newParent.providerFolderId)) {
-      return res.status(400).json({ code: 'FOLDER_MOVE_ACROSS_ACCOUNTS', message: 'This folder lives in a different Drive account than the target folder.' })
+    // A folder with a Drive mirror can only go where Drive can follow: a folder with a Drive
+    // counterpart on the same account, or the app root (that account's 9drive folder).
+    let parentDriveId: string | null = null
+    if (moving && folderRecord.providerFolderId && folderRecord.connectedAccount) {
+      parentDriveId = await driveParentForFolder(folderRecord.connectedAccount, newParent)
+      if (!parentDriveId) return res.status(400).json({ code: 'FOLDER_MOVE_ACROSS_ACCOUNTS', message: 'This folder lives in a different Drive account than the target folder.' })
     }
 
     // Drive changes go first and fail the request: Google sync treats Drive as the source of
@@ -195,10 +197,7 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
         const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(folderRecord.connectedAccount) })
         await drive.files.update({ fileId: folderRecord.providerFolderId, requestBody: { name: body.name } })
       }
-      if (moving) {
-        const parentDriveId = newParent?.providerFolderId ?? await ensureGoogleAppFolder(folderRecord.connectedAccount)
-        await moveGoogleFile(folderRecord.connectedAccount, folderRecord.providerFolderId, parentDriveId)
-      }
+      if (moving && parentDriveId) await moveGoogleFile(folderRecord.connectedAccount, folderRecord.providerFolderId, parentDriveId)
     }
 
     const folder = await prisma.folder.updateMany({

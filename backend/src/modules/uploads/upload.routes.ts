@@ -8,7 +8,7 @@ import type { ConnectedAccount, Folder } from '@prisma/client'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
-import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '../google/google.service.js'
+import { driveParentForFolder, ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '../google/google.service.js'
 import { buildS3ObjectKey, deleteS3Key, getS3ConfigForAccount, syncS3Quota, uploadS3Object } from '../s3/s3.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { accountLabel } from '../../utils/account-label.js'
@@ -138,10 +138,10 @@ async function selectUploadAccount(userId: string, sizeBytes: bigint, folderId: 
   return { folder, account: await selectAccount(userId, sizeBytes, reservedBytesByAccount) }
 }
 
-// The folder's Drive mirror only exists on the account it is bound to; elsewhere use the 9drive root.
+// Into the folder's Drive counterpart when it has one on this account (an app folder's mirror under
+// 9drive, or an imported My Drive folder); otherwise the account's 9drive folder.
 async function driveParentFor(account: ConnectedAccount, folder: Folder | null) {
-  if (folder?.providerFolderId && folder.connectedAccountId === account.id) return folder.providerFolderId
-  return ensureGoogleAppFolder(account)
+  return (await driveParentForFolder(account, folder)) ?? ensureGoogleAppFolder(account)
 }
 
 export async function handleUpload(req: AuthRequest, res: Response, next: NextFunction) {
