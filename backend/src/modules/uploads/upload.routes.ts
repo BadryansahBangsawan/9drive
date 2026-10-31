@@ -126,7 +126,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
     if (!contentType?.includes('multipart/form-data')) return res.status(400).json({ code: 'UPLOAD_INVALID_CONTENT_TYPE', message: 'multipart/form-data required.' })
 
     const busboy = Busboy({ headers: req.headers, limits: { files: 25, fileSize: env.MAX_UPLOAD_BYTES } })
-    const fields: { sizeBytes?: bigint; fileName?: string; mimeType?: string; folderId?: string } = {}
+    const fields: { sizeBytes?: bigint; fileName?: string; mimeType?: string; folderId?: string; targetAccountId?: string } = {}
     let batchMeta: UploadMeta[] | null = null
     let responded = false
     let fileSeen = false
@@ -184,7 +184,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         }
 
         const folderId = meta.folderId || null
-        let targetAccountId: string | undefined = undefined
+        let targetAccountId: string | undefined = fields.targetAccountId || undefined
         if (folderId) {
           const folderRecord = await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId: req.user!.id, deletedAt: null } })
           if (folderRecord.connectedAccountId) {
@@ -281,6 +281,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
         if (name === 'fileName') fields.fileName = value
         if (name === 'mimeType') fields.mimeType = value
         if (name === 'folderId') fields.folderId = value
+        if (name === 'targetAccountId') fields.targetAccountId = value
         if (name === 'filesMeta') batchMeta = parseBatchMeta(value)
       } catch {
         void fail(400, 'UPLOAD_INVALID_METADATA', 'Upload metadata is invalid.')
@@ -353,19 +354,9 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     const account = await selectAccount(req.user!.id, sizeBytes, undefined, targetAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
+    // S3 uploads go through the multipart endpoint, which creates its own session.
     if (account.provider !== 'google_drive') {
-      const session = await prisma.uploadSession.create({
-        data: {
-          userId: req.user!.id,
-          targetConnectedAccountId: account.id,
-          folderId,
-          fileName: body.fileName,
-          mimeType: body.mimeType,
-          sizeBytes,
-          status: 'uploading'
-        }
-      })
-      return res.status(201).json({ sessionId: session.id, provider: account.provider, offset: 0 })
+      return res.status(201).json({ provider: account.provider, accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
     }
 
     const auth = await getAuthedGoogleClient(account)
@@ -416,7 +407,7 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
       }
     })
 
-    return res.status(201).json({ sessionId: session.id, provider: 'google_drive', offset: 0 })
+    return res.status(201).json({ sessionId: session.id, provider: 'google_drive', accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
   } catch (error) {
     return next(error)
   }
