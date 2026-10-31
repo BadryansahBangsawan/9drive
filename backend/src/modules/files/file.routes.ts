@@ -21,6 +21,9 @@ import { createAuditLog } from '../../utils/audit.js'
 
 export const fileRouter = Router()
 
+// Most rows a file list returns in one response (newest first); hasMore says there are more.
+const FILE_LIST_CAP = 2000
+
 fileRouter.get('/preview/:token', async (req, res, next) => {
   try {
     const token = String(req.params.token)
@@ -88,9 +91,11 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
         folder: { select: { id: true, name: true } }
       },
       orderBy: { createdAt: 'desc' },
-      ...(query.limit ? { take: query.limit } : {}),
+      take: (query.limit ?? FILE_LIST_CAP) + 1,
     })
-    return res.json({ files: files.map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString() })) })
+    // An imported My Drive can hold hundreds of thousands of files: never return them all at once.
+    const cap = query.limit ?? FILE_LIST_CAP
+    return res.json({ files: files.slice(0, cap).map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString() })), hasMore: files.length > cap })
   } catch (error) {
     return next(error)
   }
@@ -171,9 +176,10 @@ fileRouter.get('/trash', async (req: AuthRequest, res, next) => {
         connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } },
         folder: { select: { id: true, name: true } }
       },
-      orderBy: { deletedAt: 'desc' }
+      orderBy: { deletedAt: 'desc' },
+      take: FILE_LIST_CAP + 1,
     })
-    return res.json({ files: files.map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString() })) })
+    return res.json({ files: files.slice(0, FILE_LIST_CAP).map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString() })), hasMore: files.length > FILE_LIST_CAP })
   } catch (error) {
     return next(error)
   }

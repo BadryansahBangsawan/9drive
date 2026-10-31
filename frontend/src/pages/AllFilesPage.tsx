@@ -240,8 +240,9 @@ export function AllFilesPage() {
     }
     const query = params.toString()
     const path = query ? `/files?${query}` : '/files'
-    const data = await apiFetch<{ files: BackendFile[] }>(path)
+    const data = await apiFetch<{ files: BackendFile[]; hasMore?: boolean }>(path)
     setFiles(data.files.map(mapFile))
+    if (data.hasMore) setMessage(`Showing the newest ${data.files.length.toLocaleString()} files. Search or filter to narrow it down.`)
   }
 
   async function loadFolders() {
