@@ -111,9 +111,10 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   const drive = google.drive({ version: 'v3', auth })
   const appFolderId = await ensureGoogleAppFolder(account)
 
+  // Include app-deleted folders: their Drive folders still exist and may hold files restored from Trash.
   const userFolders = await prisma.folder.findMany({
-    where: { userId, connectedAccountId: account.id, deletedAt: null },
-    select: { id: true, providerFolderId: true }
+    where: { userId, connectedAccountId: account.id },
+    select: { id: true, providerFolderId: true, deletedAt: true }
   })
   const parentIds = [
     appFolderId,
@@ -149,7 +150,7 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   let updated = 0
   let deleted = 0
 
-  const folderIdMap = new Map(userFolders.map((f) => [f.providerFolderId, f.id]))
+  const folderIdMap = new Map(userFolders.filter((f) => !f.deletedAt).map((f) => [f.providerFolderId, f.id]))
 
   for (const driveFile of driveFiles) {
     const dbFolderId = driveFile.parentId === appFolderId ? null : (folderIdMap.get(driveFile.parentId) ?? null)
@@ -162,11 +163,15 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
       continue
     }
 
-    const needsUpdate = existing.name !== driveFile.name || existing.mimeType !== driveFile.mimeType || existing.sizeBytes !== driveFile.sizeBytes || existing.status !== 'active' || existing.deletedAt !== null || existing.folderId !== dbFolderId
+    // Files the user moved to the app Trash stay there; sync only refreshes their metadata.
+    const trashed = existing.status === 'deleted'
+    const needsUpdate = existing.name !== driveFile.name || existing.mimeType !== driveFile.mimeType || existing.sizeBytes !== driveFile.sizeBytes || (!trashed && (existing.status !== 'active' || existing.deletedAt !== null || existing.folderId !== dbFolderId))
     if (needsUpdate) {
       await prisma.file.update({
         where: { id: existing.id },
-        data: { name: driveFile.name, mimeType: driveFile.mimeType, sizeBytes: driveFile.sizeBytes, status: 'active', deletedAt: null, folderId: dbFolderId },
+        data: trashed
+          ? { name: driveFile.name, mimeType: driveFile.mimeType, sizeBytes: driveFile.sizeBytes }
+          : { name: driveFile.name, mimeType: driveFile.mimeType, sizeBytes: driveFile.sizeBytes, status: 'active', deletedAt: null, folderId: dbFolderId },
       })
       updated += 1
     }

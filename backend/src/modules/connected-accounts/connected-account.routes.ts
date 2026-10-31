@@ -4,10 +4,10 @@ import { z } from 'zod'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
-import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
-import { hashPassword } from '../../utils/password.js'
+import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
+import { completeGoogleLogin } from '../auth/google-login.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
-import { syncS3Quota, testS3Connection } from '../s3/s3.service.js'
+import { assertSafeS3Endpoint, syncS3Quota, testS3Connection } from '../s3/s3.service.js'
 
 export const connectedAccountRouter = Router()
 
@@ -82,14 +82,14 @@ async function createGoogleConnectUrl(req: AuthRequest) {
 connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const body = s3ConnectSchema.parse(req.body)
-    const providerConfig = await prisma.providerConfig.findFirstOrThrow({ where: { provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
+    if (body.endpoint) await assertSafeS3Endpoint(body.endpoint)
     const providerAccountId = `${body.bucket}:${body.endpoint || body.region}`
     const existingAccount = await prisma.connectedAccount.findUnique({ where: { userId_provider_providerAccountId: { userId: req.user!.id, provider: 's3', providerAccountId } } })
     const account = existingAccount
       ? await prisma.connectedAccount.update({
         where: { id: existingAccount.id },
         data: {
-          providerConfigId: providerConfig.id,
+          providerConfigId: null,
           email: `${body.bucket} (S3)`,
           displayName: body.name,
           accessTokenEncrypted: encryptText('s3'),
@@ -101,7 +101,7 @@ connectedAccountRouter.post('/s3', requireAuth, async (req: AuthRequest, res, ne
       })
       : await prisma.connectedAccount.create({ data: {
         userId: req.user!.id,
-        providerConfigId: providerConfig.id,
+        providerConfigId: null,
         provider: 's3',
         providerAccountId,
         email: `${body.bucket} (S3)`,
@@ -191,50 +191,8 @@ connectedAccountRouter.get('/google/callback', async (req, res, next) => {
     if (!providerAccountId || !email) return res.status(400).json({ code: 'GOOGLE_PROFILE_FAILED', message: 'Google profile missing id or email.' })
 
     if (oauthState.flow === 'login') {
-      const name = profile.data.name || email.split('@')[0] || 'Google User'
-      const user = await prisma.user.upsert({
-        where: { email },
-        create: { email, name, passwordHash: await hashPassword(randomToken(32)) },
-        update: { name },
-      })
-      const existingAccount = await prisma.connectedAccount.findUnique({ where: { userId_provider_providerAccountId: { userId: user.id, provider: 'google_drive', providerAccountId } } })
-      const refreshTokenEncrypted = tokens.refresh_token ? encryptText(tokens.refresh_token) : existingAccount?.refreshTokenEncrypted
-      if (!refreshTokenEncrypted) {
-        console.error('Google login failed: no refresh token received and no existing account. Has refresh_token:', !!tokens.refresh_token)
-        return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
-      }
-      const account = await prisma.connectedAccount.upsert({
-        where: { userId_provider_providerAccountId: { userId: user.id, provider: 'google_drive', providerAccountId } },
-        create: {
-          userId: user.id,
-          providerConfigId: oauthState.providerConfigId,
-          provider: 'google_drive',
-          providerAccountId,
-          email,
-          displayName: profile.data.name,
-          avatarUrl: profile.data.picture,
-          accessTokenEncrypted: encryptText(tokens.access_token),
-          refreshTokenEncrypted,
-          tokenExpiresAt: new Date(tokens.expiry_date ?? Date.now() + 3600_000),
-          scopes: oauthState.providerConfig.scopes as string[],
-          status: 'connected',
-        },
-        update: {
-          providerConfigId: oauthState.providerConfigId,
-          email,
-          displayName: profile.data.name,
-          avatarUrl: profile.data.picture,
-          accessTokenEncrypted: encryptText(tokens.access_token),
-          refreshTokenEncrypted,
-          tokenExpiresAt: new Date(tokens.expiry_date ?? Date.now() + 3600_000),
-          scopes: oauthState.providerConfig.scopes as string[],
-          status: 'connected',
-        },
-      })
-      await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
-      await syncGoogleQuota(account.id).catch(() => undefined)
-      const handoffToken = randomToken()
-      await prisma.authHandoff.create({ data: { userId: user.id, tokenHash: hashToken(handoffToken), expiresAt: new Date(Date.now() + 5 * 60_000) } })
+      const handoffToken = await completeGoogleLogin(oauthState, tokens, profile.data)
+      if (!handoffToken) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
       return res.redirect(`${env.FRONTEND_URL}/google-auth?token=${handoffToken}`)
     }
 

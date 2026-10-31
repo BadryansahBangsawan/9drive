@@ -1,6 +1,8 @@
 import type { Response } from 'express'
+import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import type { ConnectedAccount, File } from '@prisma/client'
 import { getAuthedGoogleClient } from '../google/google.service.js'
+import { pipeToResponse, setFileResponseHeaders } from './file-response.js'
 
 type FileWithAccount = File & { connectedAccount: ConnectedAccount }
 type StreamOptions = { disposition?: 'inline' | 'attachment' }
@@ -17,10 +19,6 @@ const googlePreviewExportMimeTypes: Record<string, { mimeType: string; extension
   'application/vnd.google-apps.spreadsheet': { mimeType: 'application/pdf', extension: '.pdf' },
 }
 
-function contentDisposition(type: 'inline' | 'attachment', fileName: string) {
-  return `${type}; filename="${fileName.replaceAll('"', '')}"`
-}
-
 export function withExtension(fileName: string, extension: string) {
   return fileName.toLowerCase().endsWith(extension) ? fileName : `${fileName}${extension}`
 }
@@ -30,7 +28,6 @@ export function normalizeHeaders(headers: Headers | Record<string, string>) {
   return headers
 }
 
-
 export async function streamGoogleFile(file: FileWithAccount, range: string | undefined, res: Response, options: StreamOptions = {}) {
   const auth = await getAuthedGoogleClient(file.connectedAccount)
   const headers = normalizeHeaders(await auth.getRequestHeaders())
@@ -38,9 +35,12 @@ export async function streamGoogleFile(file: FileWithAccount, range: string | un
   const responseMimeType = exportTarget?.mimeType ?? file.mimeType
   const responseFileName = exportTarget ? withExtension(file.name, exportTarget.extension) : file.name
   const url = exportTarget
-    ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
-    : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
+    ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+    : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}?alt=media`
+  const controller = new AbortController()
+  res.on('close', () => controller.abort())
   const response = await fetch(url, {
+    signal: controller.signal,
     headers: {
       ...headers,
       ...(range && !exportTarget ? { Range: range } : {}),
@@ -48,14 +48,15 @@ export async function streamGoogleFile(file: FileWithAccount, range: string | un
   })
 
   if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText)
-    return res.status(response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: message || response.statusText })
+    const detail = await response.text().catch(() => response.statusText)
+    console.error('Google file stream failed:', response.status, detail)
+    const status = response.status === 404 ? 404 : response.status === 416 ? 416 : 502
+    return res.status(status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: 'Could not read the file from Google Drive.' })
   }
 
   res.status(response.status)
-  res.setHeader('Content-Type', responseMimeType)
+  setFileResponseHeaders(res, { mimeType: responseMimeType, fileName: responseFileName, disposition: options.disposition })
   res.setHeader('Accept-Ranges', 'bytes')
-  if (options.disposition) res.setHeader('Content-Disposition', contentDisposition(options.disposition, responseFileName))
 
   const contentLength = response.headers.get('content-length')
   const contentRange = response.headers.get('content-range')
@@ -66,15 +67,5 @@ export async function streamGoogleFile(file: FileWithAccount, range: string | un
     res.end()
     return
   }
-  const reader = response.body.getReader()
-  async function pump(): Promise<void> {
-    const { done, value } = await reader.read()
-    if (done) {
-      res.end()
-      return
-    }
-    res.write(Buffer.from(value))
-    return pump()
-  }
-  return pump()
+  return pipeToResponse(response.body as WebReadableStream<Uint8Array>, res)
 }

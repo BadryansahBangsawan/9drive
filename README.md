@@ -94,8 +94,9 @@ Try the live preview at **[9drive.zenhosta.com](https://9drive.zenhosta.com)**.
 
 **Accounts and admin**
 - Email/password sign-up (optional reCAPTCHA) or **Continue with Google**, which connects your first Drive automatically.
+- The first account on a new instance is the **admin**. Only the admin can change the Google OAuth credentials or run updates from **Settings**.
 - Google OAuth credentials can be set in **Settings**. No `.env` editing needed.
-- Backup/restore and one-click updates from Settings (for PM2 setups).
+- One-click updates from Settings (for PM2 setups).
 
 ## Quick start
 
@@ -262,6 +263,7 @@ Either way, the credentials are encrypted and stored in MySQL as one global conf
 | `REFRESH_TOKEN_TTL_DAYS` | Refresh token lifetime (default `30`). |
 | `MAX_UPLOAD_BYTES` | Largest allowed upload (default 5 GB). |
 | `RECAPTCHA_SECRET_KEY` | Optional. Turns on captcha for sign-up, together with the frontend site key. |
+| `S3_ALLOW_PRIVATE_ENDPOINTS` | Optional, default `false`. Set `true` to allow S3 endpoints on private or loopback addresses, such as a MinIO container on the same network. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Only read by the seed command. The app reads the encrypted copy from the database. |
 
 </details>
@@ -333,7 +335,7 @@ npm run build            # serve frontend/dist with any static web server
 <details>
 <summary><b>One-click updates (PM2 setups)</b></summary>
 
-On a VPS where the backend runs under PM2, **Settings** has an update button and a live log viewer. When you press it, the backend runs `update.sh` from the project root. If that file doesn't exist, it falls back to `git pull`.
+On a VPS where the backend runs under PM2, the admin's **Settings** page has an update button and a live log viewer. When you press it, the backend runs `update.sh` from the project root. If that file doesn't exist, it falls back to `git pull`.
 
 A typical `update.sh` does the same as these manual commands:
 

@@ -145,11 +145,14 @@ fileRouter.get('/trash', async (req: AuthRequest, res, next) => {
 fileRouter.post('/batch/restore', async (req: AuthRequest, res, next) => {
   try {
     const body = batchFileSchema.parse(req.body)
-    const files = await prisma.file.findMany({ where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'deleted' } })
+    const files = await prisma.file.findMany({ where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'deleted' }, include: { folder: { select: { deletedAt: true } } } })
     const result = await prisma.file.updateMany({
       where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'deleted' },
       data: { status: 'active', deletedAt: null }
     })
+    // A file restored out of a deleted folder goes back to the root instead of an invisible folder.
+    const orphanedIds = files.filter((file) => file.folder?.deletedAt).map((file) => file.id)
+    if (orphanedIds.length > 0) await prisma.file.updateMany({ where: { id: { in: orphanedIds }, userId: req.user!.id }, data: { folderId: null } })
     for (const f of files) {
       await createAuditLog(req.user!.id, 'RESTORE_FILE', 'file', f.id, { name: f.name })
     }
@@ -301,10 +304,10 @@ fileRouter.post('/:id/share', async (req: AuthRequest, res, next) => {
   }
 })
 
-fileRouter.post('/:id/public-permission', requireAuth, async (req: AuthRequest, res, next) => {
+fileRouter.post('/:id/public-permission', async (req: AuthRequest, res, next) => {
   try {
     const fileId = String(req.params.id)
-    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id }, include: { connectedAccount: true } })
+    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' }, include: { connectedAccount: true } })
     if (file.provider !== 'google_drive') {
       return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Only Google Drive files can be made public.' })
     }
@@ -313,14 +316,15 @@ fileRouter.post('/:id/public-permission', requireAuth, async (req: AuthRequest, 
     await drive.permissions.create({
       fileId: file.providerFileId,
       requestBody: {
-        role: 'writer',
+        role: 'reader',
         type: 'anyone'
       }
     })
+    await createAuditLog(req.user!.id, 'MAKE_FILE_PUBLIC', 'file', file.id, { name: file.name })
     const metadata = await drive.files.get({ fileId: file.providerFileId, fields: 'webViewLink,webContentLink' })
     return res.json({ status: 'ok', url: metadata.data.webViewLink ?? metadata.data.webContentLink })
-  } catch (error: any) {
-    return res.status(500).json({ code: 'GOOGLE_API_ERROR', message: error.message || 'Failed to update Google Drive permissions.' })
+  } catch (error) {
+    return next(error)
   }
 })
 
@@ -354,20 +358,7 @@ fileRouter.get('/:id/view-url', async (req: AuthRequest, res, next) => {
     if (file.provider === 's3') return res.json({ url: null })
     const auth = await getAuthedGoogleClient(file.connectedAccount)
     const drive = google.drive({ version: 'v3', auth })
-
-    // Automatically set permission to public writer when retrieving/copying the view URL!
-    try {
-      await drive.permissions.create({
-        fileId: file.providerFileId,
-        requestBody: {
-          role: 'writer',
-          type: 'anyone'
-        }
-      })
-    } catch (err: any) {
-      console.error('Failed to make Google Drive file public during view-url retrieval:', err.message || err)
-    }
-
+    // Returns the owner's Drive link only. Sharing is an explicit action (POST /:id/share or /:id/public-permission).
     const metadata = await drive.files.get({ fileId: file.providerFileId, fields: 'webViewLink,webContentLink' })
     return res.json({ url: metadata.data.webViewLink ?? metadata.data.webContentLink })
   } catch (error) {
@@ -410,12 +401,31 @@ fileRouter.post('/batch-download', async (req: AuthRequest, res, next) => {
     res.setHeader('Content-Disposition', 'attachment; filename="9drive-download.zip"')
 
     const archive = new ZipArchive({ zlib: { level: 9 } })
-    archive.on('error', (err: any) => {
-      throw err
+    let aborted = false
+    archive.on('error', (err: Error) => {
+      console.error('Zip archive failed:', err)
+      aborted = true
+      res.destroy(err)
+    })
+    res.on('close', () => {
+      if (!res.writableFinished) {
+        aborted = true
+        archive.abort()
+      }
     })
     archive.pipe(res)
 
+    const usedNames = new Map<string, number>()
+    const uniqueName = (name: string) => {
+      const count = usedNames.get(name) ?? 0
+      usedNames.set(name, count + 1)
+      if (count === 0) return name
+      const dot = name.lastIndexOf('.')
+      return dot > 0 ? `${name.slice(0, dot)} (${count})${name.slice(dot)}` : `${name} (${count})`
+    }
+
     for (const file of files) {
+      if (aborted) return
       try {
         let stream: Readable
         let fileName = file.name
@@ -432,19 +442,19 @@ fileRouter.post('/batch-download', async (req: AuthRequest, res, next) => {
             fileName = withExtension(file.name, exportTarget.extension)
           }
           const url = exportTarget
-            ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
-            : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
+            ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+            : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}?alt=media`
           const response = await fetch(url, { headers })
           if (!response.ok || !response.body) continue
           stream = Readable.fromWeb(response.body as any)
         }
-        archive.append(stream, { name: fileName })
+        archive.append(stream, { name: uniqueName(fileName.replace(/[\\/]+/g, '-')) })
       } catch (err) {
         console.error(`Failed to add file ${file.name} to zip:`, err)
       }
     }
 
-    await archive.finalize()
+    if (!aborted) await archive.finalize()
   } catch (error) {
     return next(error)
   }

@@ -61,6 +61,7 @@ Environment:
 - `JWT_ACCESS_SECRET`
 - `TOKEN_ENCRYPTION_KEY`
 - `RECAPTCHA_SECRET_KEY` (optional; enables captcha verification when paired with frontend site key)
+- `S3_ALLOW_PRIVATE_ENDPOINTS` (optional, default `false`; allows S3 endpoints on private/loopback addresses)
 - `ACCESS_TOKEN_TTL_SECONDS`
 - `REFRESH_TOKEN_TTL_DAYS`
 - `MAX_UPLOAD_BYTES`
@@ -91,6 +92,9 @@ Security rules:
 - Auth handoff, share, and preview tokens are stored as hashes where applicable.
 - Uploaded files must stream through backend to Google Drive folder `9drive`; do not store uploaded files on disk.
 - Keep CORS restricted by `FRONTEND_URL`.
+- Never grant `anyone` permissions on Drive files automatically; public Drive access is an explicit user action.
+- Serve stored files through `setFileResponseHeaders` (`modules/files/file-response.ts`) so user content cannot run as a page on the app origin.
+- Instance-wide settings (`/system/*`) require `requireAuth` + `requireAdmin`. `User.role` is `admin` or `user`; the first account on an instance without an admin becomes admin.
 - Keep auth/token storage behavior centralized; do not change without explicit reason.
 
 Database rules:

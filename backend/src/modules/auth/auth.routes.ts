@@ -5,9 +5,11 @@ import { prisma } from '../../config/prisma.js'
 import { env } from '../../config/env.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { hashPassword, verifyPassword } from '../../utils/password.js'
-import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
+import { hashToken, randomToken } from '../../utils/crypto.js'
 import { signAccessToken } from '../../utils/jwt.js'
-import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
+import { rateLimit } from '../../middleware/rate-limit.middleware.js'
+import { createOAuthClient } from '../google/google.service.js'
+import { completeGoogleLogin, roleForNewUser } from './google-login.js'
 
 export const authRouter = Router()
 
@@ -15,6 +17,13 @@ const registerSchema = z.object({ name: z.string().min(2), email: z.string().ema
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) })
 const refreshSchema = z.object({ refreshToken: z.string().min(1) })
 const googleExchangeSchema = z.object({ token: z.string().min(1) })
+
+const credentialLimiter = rateLimit({ name: 'auth-credentials', windowMs: 15 * 60_000, max: 20 })
+const tokenLimiter = rateLimit({ name: 'auth-tokens', windowMs: 60_000, max: 60 })
+
+function publicUser(user: { id: string; name: string; email: string; role: string }) {
+  return { id: user.id, name: user.name, email: user.email, role: user.role }
+}
 
 async function createSession(userId: string, req: AuthRequest) {
   const refreshToken = randomToken()
@@ -40,27 +49,27 @@ async function verifyCaptcha(token: string | undefined) {
   return Boolean(data.success)
 }
 
-authRouter.post('/register', async (req, res, next) => {
+authRouter.post('/register', credentialLimiter, async (req, res, next) => {
   try {
     const body = registerSchema.parse(req.body)
     if (!(await verifyCaptcha(body.captchaToken))) return res.status(400).json({ code: 'CAPTCHA_FAILED', message: 'Captcha verification failed.' })
     const existing = await prisma.user.findUnique({ where: { email: body.email } })
     if (existing) return res.status(409).json({ code: 'AUTH_EMAIL_TAKEN', message: 'Email already registered.' })
-    const user = await prisma.user.create({ data: { name: body.name, email: body.email, passwordHash: await hashPassword(body.password) } })
+    const user = await prisma.user.create({ data: { name: body.name, email: body.email, passwordHash: await hashPassword(body.password), role: await roleForNewUser() } })
     const tokens = await createSession(user.id, req)
-    return res.status(201).json({ ...tokens, user: { id: user.id, name: user.name, email: user.email } })
+    return res.status(201).json({ ...tokens, user: publicUser(user) })
   } catch (error) {
     return next(error)
   }
 })
 
-authRouter.post('/login', async (req, res, next) => {
+authRouter.post('/login', credentialLimiter, async (req, res, next) => {
   try {
     const body = loginSchema.parse(req.body)
     const user = await prisma.user.findUnique({ where: { email: body.email } })
     if (!user || !(await verifyPassword(user.passwordHash, body.password))) return res.status(401).json({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid email or password.' })
     const tokens = await createSession(user.id, req)
-    return res.json({ ...tokens, user: { id: user.id, name: user.name, email: user.email } })
+    return res.json({ ...tokens, user: publicUser(user) })
   } catch (error) {
     return next(error)
   }
@@ -92,61 +101,12 @@ authRouter.get('/google/callback', async (req, res) => {
     if (oauthState.flow !== 'login' || oauthState.usedAt || oauthState.expiresAt < new Date()) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
 
     const client = createOAuthClient(oauthState.providerConfig)
-    const tokenResult = await client.getToken(query.code)
-    const tokens = tokenResult.tokens
-    if (!tokens.access_token) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
+    const { tokens } = await client.getToken(query.code)
     client.setCredentials(tokens)
+    const profile = await google.oauth2({ version: 'v2', auth: client }).userinfo.get()
 
-    const oauth2 = google.oauth2({ version: 'v2', auth: client })
-    const profile = await oauth2.userinfo.get()
-    const providerAccountId = profile.data.id
-    const email = profile.data.email
-    if (!providerAccountId || !email) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
-
-    const name = profile.data.name || email.split('@')[0] || 'Google User'
-    const user = await prisma.user.upsert({
-      where: { email },
-      create: { email, name, passwordHash: await hashPassword(randomToken(32)) },
-      update: { name },
-    })
-    const existingAccount = await prisma.connectedAccount.findUnique({ where: { userId_provider_providerAccountId: { userId: user.id, provider: 'google_drive', providerAccountId } } })
-    const refreshTokenEncrypted = tokens.refresh_token ? encryptText(tokens.refresh_token) : existingAccount?.refreshTokenEncrypted
-    if (!refreshTokenEncrypted) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
-
-    const account = await prisma.connectedAccount.upsert({
-      where: { userId_provider_providerAccountId: { userId: user.id, provider: 'google_drive', providerAccountId } },
-      create: {
-        userId: user.id,
-        providerConfigId: oauthState.providerConfigId,
-        provider: 'google_drive',
-        providerAccountId,
-        email,
-        displayName: profile.data.name,
-        avatarUrl: profile.data.picture,
-        accessTokenEncrypted: encryptText(tokens.access_token),
-        refreshTokenEncrypted,
-        tokenExpiresAt: new Date(tokens.expiry_date ?? Date.now() + 3600_000),
-        scopes: oauthState.providerConfig.scopes as string[],
-        status: 'connected',
-      },
-      update: {
-        providerConfigId: oauthState.providerConfigId,
-        email,
-        displayName: profile.data.name,
-        avatarUrl: profile.data.picture,
-        accessTokenEncrypted: encryptText(tokens.access_token),
-        refreshTokenEncrypted,
-        tokenExpiresAt: new Date(tokens.expiry_date ?? Date.now() + 3600_000),
-        scopes: oauthState.providerConfig.scopes as string[],
-        status: 'connected',
-      },
-    })
-
-    await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
-    await syncGoogleQuota(account.id).catch(() => undefined)
-
-    const handoffToken = randomToken()
-    await prisma.authHandoff.create({ data: { userId: user.id, tokenHash: hashToken(handoffToken), expiresAt: new Date(Date.now() + 5 * 60_000) } })
+    const handoffToken = await completeGoogleLogin(oauthState, tokens, profile.data)
+    if (!handoffToken) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
     return res.redirect(`${env.FRONTEND_URL}/google-auth?token=${handoffToken}`)
   } catch (error) {
     console.error('Google Auth callback failed:', error)
@@ -154,20 +114,22 @@ authRouter.get('/google/callback', async (req, res) => {
   }
 })
 
-authRouter.post('/google/exchange', async (req, res, next) => {
+authRouter.post('/google/exchange', tokenLimiter, async (req, res, next) => {
   try {
     const body = googleExchangeSchema.parse(req.body)
     const handoff = await prisma.authHandoff.findFirst({ where: { tokenHash: hashToken(body.token), usedAt: null, expiresAt: { gt: new Date() } }, include: { user: true } })
     if (!handoff) return res.status(401).json({ code: 'AUTH_GOOGLE_HANDOFF_INVALID', message: 'Google login session expired.' })
-    await prisma.authHandoff.update({ where: { id: handoff.id }, data: { usedAt: new Date() } })
+    // Claim the token atomically so two concurrent exchanges cannot both create a session.
+    const claimed = await prisma.authHandoff.updateMany({ where: { id: handoff.id, usedAt: null }, data: { usedAt: new Date() } })
+    if (claimed.count === 0) return res.status(401).json({ code: 'AUTH_GOOGLE_HANDOFF_INVALID', message: 'Google login session expired.' })
     const tokens = await createSession(handoff.userId, req)
-    return res.json({ ...tokens, user: { id: handoff.user.id, name: handoff.user.name, email: handoff.user.email } })
+    return res.json({ ...tokens, user: publicUser(handoff.user) })
   } catch (error) {
     return next(error)
   }
 })
 
-authRouter.post('/refresh', async (req, res, next) => {
+authRouter.post('/refresh', tokenLimiter, async (req, res, next) => {
   try {
     const body = refreshSchema.parse(req.body)
     const session = await prisma.userSession.findFirst({ where: { refreshTokenHash: hashToken(body.refreshToken), revokedAt: null, expiresAt: { gt: new Date() } } })
@@ -189,7 +151,7 @@ authRouter.post('/logout', requireAuth, async (req: AuthRequest, res, next) => {
 
 authRouter.get('/me', requireAuth, async (req: AuthRequest, res, next) => {
   try {
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, status: true } })
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, status: true, role: true } })
     return res.json({ user })
   } catch (error) {
     return next(error)

@@ -39,7 +39,9 @@ Other scripts that `AGENTS.md` doesn't list:
 
 **Google OAuth config comes from the DB, not env.** `env.ts` doesn't read `GOOGLE_*`. Those vars are read only by the seed scripts, which write a global `ProviderConfig` row (`userId` null) with encrypted credentials. It can also be set in Settings via `POST /system/google-config`. In Docker, `seed:google-config:docker` skips seeding when the credentials are blank or placeholders.
 
-**Other modules missing from AGENTS.md:** `api-keys`, `audit-logs` (`utils/audit.ts` `createAuditLog`, shown on ActivityLogPage), `system` (self-update that runs `update.sh` from the repo root and falls back to `git pull`, `update-log`, `google-config`, backup/restore), and `s3`.
+**Other modules missing from AGENTS.md:** `api-keys`, `audit-logs` (`utils/audit.ts` `createAuditLog`, shown on ActivityLogPage), `system` (admin-only via `middleware/admin.middleware.ts`: self-update that runs `update.sh` from the repo root and falls back to `git pull`, `update-log`, `google-config`), and `s3`.
+
+**Google sign-in and existing accounts.** `modules/auth/google-login.ts` is shared by both OAuth callbacks. If a Google sign-in matches a user whose email was never verified (`User.emailVerifiedAt` null, i.e. a password registration), that account's password, sessions, and API keys are reset so whoever registered the address first loses access.
 
 **Backend module style.** The backend is ESM with `module: NodeNext`, so relative imports need a `.js` suffix even in `.ts` files. Most route files hold their logic inline; services exist only for provider integrations (`google/`, `s3/`). Token encrypt/hash helpers are in `utils/crypto.ts`.
 
