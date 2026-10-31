@@ -461,14 +461,18 @@ fileRouter.post('/batch-download', async (req: AuthRequest, res, next) => {
 
     const archive = new ZipArchive({ zlib: { level: 9 } })
     let aborted = false
+    let markStopped: () => void = () => undefined
+    const stopped = new Promise<void>((resolve) => { markStopped = resolve })
     archive.on('error', (err: Error) => {
       console.error('Zip archive failed:', err)
       aborted = true
+      markStopped()
       res.destroy(err)
     })
     res.on('close', () => {
       if (!res.writableFinished) {
         aborted = true
+        markStopped()
         archive.abort()
       }
     })
@@ -483,37 +487,51 @@ fileRouter.post('/batch-download', async (req: AuthRequest, res, next) => {
       return dot > 0 ? `${name.slice(0, dot)} (${count})${name.slice(dot)}` : `${name} (${count})`
     }
 
-    for (const file of files) {
-      if (aborted) return
-      try {
-        let stream: Readable
-        let fileName = file.name
-        if (file.provider === 's3') {
-          const config = await getS3ConfigForAccount(file.connectedAccountId)
-          const client = createS3Client(config)
-          const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId }))
-          stream = response.Body as Readable
-        } else {
-          const auth = await getAuthedGoogleClient(file.connectedAccount)
-          const headers = normalizeHeaders(await auth.getRequestHeaders())
-          const exportTarget = googleDownloadExportMimeTypes[file.mimeType]
-          if (exportTarget) {
-            fileName = withExtension(file.name, exportTarget.extension)
-          }
-          const url = exportTarget
-            ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
-            : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}?alt=media`
-          const response = await fetch(url, { headers })
-          if (!response.ok || !response.body) continue
-          stream = Readable.fromWeb(response.body as any)
-        }
-        archive.append(stream, { name: uniqueName(fileName.replace(/[\\/]+/g, '-')) })
-      } catch (err) {
-        console.error(`Failed to add file ${file.name} to zip:`, err)
+    // Open each upstream body only when the archive is ready for it. Opening all of them up
+    // front left most bodies idle until they timed out.
+    const openFileStream = async (file: (typeof files)[number]): Promise<{ stream: Readable; fileName: string }> => {
+      if (file.provider === 's3') {
+        const config = await getS3ConfigForAccount(file.connectedAccountId)
+        const client = createS3Client(config)
+        const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId }))
+        return { stream: response.Body as Readable, fileName: file.name }
       }
+      const auth = await getAuthedGoogleClient(file.connectedAccount)
+      const headers = normalizeHeaders(await auth.getRequestHeaders())
+      const exportTarget = googleDownloadExportMimeTypes[file.mimeType]
+      const url = exportTarget
+        ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+        : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.providerFileId)}?alt=media`
+      const response = await fetch(url, { headers })
+      if (!response.ok || !response.body) throw new Error(`Google Drive returned ${response.status}`)
+      return { stream: Readable.fromWeb(response.body as any), fileName: exportTarget ? withExtension(file.name, exportTarget.extension) : file.name }
     }
 
-    if (!aborted) await archive.finalize()
+    const missing: string[] = []
+    for (const file of files) {
+      if (aborted) return
+      let opened: { stream: Readable; fileName: string }
+      try {
+        opened = await openFileStream(file)
+      } catch (err) {
+        console.error(`Failed to add file ${file.name} to zip:`, err)
+        missing.push(`${file.name}: ${err instanceof Error ? err.message : 'could not be read'}`)
+        continue
+      }
+      if (aborted) {
+        opened.stream.destroy()
+        return
+      }
+      const entryWritten = new Promise<void>((resolve) => archive.once('entry', () => resolve()))
+      archive.append(opened.stream, { name: uniqueName(opened.fileName.replace(/[\\/]+/g, '-')) })
+      await Promise.race([entryWritten, stopped])
+    }
+
+    if (aborted) return
+    if (missing.length > 0) {
+      archive.append(`These files could not be downloaded and are not in this archive:\n\n${missing.join('\n')}\n`, { name: uniqueName('MISSING.txt') })
+    }
+    await archive.finalize()
   } catch (error) {
     return next(error)
   }
