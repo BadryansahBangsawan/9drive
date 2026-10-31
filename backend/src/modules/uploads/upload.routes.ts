@@ -470,6 +470,10 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
     const startByte = BigInt(match[1])
     const endByte = BigInt(match[2])
     const totalBytes = BigInt(match[3])
+    // The total was fixed (and checked against quota/max size) at init; don't let a chunk change it.
+    if (totalBytes !== session.sizeBytes || startByte > endByte || endByte >= totalBytes) {
+      return res.status(400).json({ code: 'INVALID_CONTENT_RANGE', message: 'Content-Range does not match this upload session.' })
+    }
 
     if (!session.googleSessionUri || !session.targetConnectedAccountId) {
       return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Only Google Drive resumable uploads supported.' })
@@ -517,7 +521,7 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
             providerFileId: fileMeta.id,
             name: fileMeta.name || session.fileName,
             mimeType: fileMeta.mimeType || session.mimeType,
-            sizeBytes: totalBytes
+            sizeBytes: session.sizeBytes
           }
         })
       }
