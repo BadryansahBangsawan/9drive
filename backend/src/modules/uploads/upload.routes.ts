@@ -17,6 +17,10 @@ export const uploadRouter = Router()
 type UploadMeta = { fieldName: string; fileName: string; mimeType: string; sizeBytes: bigint; folderId?: string }
 type RoutingMode = 'most_available' | 'round_robin' | 'priority'
 
+function auditUpload(userId: string, file: { id: string; name: string }, sizeBytes: bigint, account: { provider: string; email: string; displayName?: string | null }) {
+  return createAuditLog(userId, 'UPLOAD_FILE', 'file', file.id, { name: file.name, size: sizeBytes.toString(), provider: account.provider, accountLabel: accountLabel(account) })
+}
+
 function logUpload(message: string, metadata?: Record<string, unknown>) {
   console.info('[upload]', message, metadata ?? '')
 }
@@ -232,7 +236,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
           await prisma.file.update({ where: { id: provisionalFile.id }, data: { providerFileId, status: 'active' } })
           completed.push({ ...provisionalFile, providerFileId, status: 'active', sizeBytes: provisionalFile.sizeBytes.toString() })
           logUpload('s3 upload completed', { sessionId: session.id, accountId: account.id, fileName })
-          await createAuditLog(req.user!.id, 'UPLOAD_FILE', 'file', provisionalFile.id, { name: fileName, size: meta.sizeBytes.toString(), provider: account.provider, accountLabel: accountLabel(account) })
+          await auditUpload(req.user!.id, { id: provisionalFile.id, name: fileName }, meta.sizeBytes, account)
         } else {
           const auth = await getAuthedGoogleClient(account)
           const drive = google.drive({ version: 'v3', auth })
@@ -258,7 +262,7 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
           const file = await prisma.file.create({ data: { userId: req.user!.id, connectedAccountId: account.id, folderId, provider: 'google_drive', providerFileId, name: uploaded.data.name ?? fileName, mimeType: uploaded.data.mimeType ?? meta.mimeType, sizeBytes: meta.sizeBytes } })
           logUpload('database file created', { sessionId: session.id, fileId: file.id, accountId: account.id })
           completed.push({ ...file, sizeBytes: file.sizeBytes.toString() })
-          await createAuditLog(req.user!.id, 'UPLOAD_FILE', 'file', file.id, { name: file.name, size: meta.sizeBytes.toString(), provider: account.provider, accountLabel: accountLabel(account) })
+          await auditUpload(req.user!.id, file, meta.sizeBytes, account)
         }
 
         await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'completed', completedAt: new Date() } })
@@ -537,7 +541,7 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
         data: { status: 'completed', completedAt: new Date() }
       })
 
-      await createAuditLog(req.user!.id, 'UPLOAD_FILE', 'file', existingFile.id, { name: existingFile.name, size: existingFile.sizeBytes.toString(), provider: account.provider, accountLabel: accountLabel(account) })
+      await auditUpload(req.user!.id, existingFile, existingFile.sizeBytes, account)
 
       syncQuotaInBackground(account.id, session.id)
 
