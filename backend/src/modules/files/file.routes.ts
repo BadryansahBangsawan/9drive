@@ -6,7 +6,7 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { hashToken, randomToken } from '../../utils/crypto.js'
 import { shareExpiresAt } from '../../utils/share-expiry.js'
 import type { ConnectedAccount, File, Folder } from '@prisma/client'
-import { driveParentForFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleQuota } from '../google/google.service.js'
+import { applyDriveChange, driveParentForFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleQuota } from '../google/google.service.js'
 import { syncGoogleDrive } from '../google/drive-sync.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile } from './stream-file.js'
@@ -106,8 +106,10 @@ function createDriveMover() {
   const appFolderIds = new Map<string, Promise<string>>()
   return async (file: File & { connectedAccount: ConnectedAccount }, folder: Folder | null) => {
     if (file.provider !== 'google_drive') return
-    const parentId = await driveParentForFolder(file.connectedAccount, folder, appFolderIds)
-    if (parentId) await moveGoogleFile(file.connectedAccount, file.providerFileId, parentId)
+    await applyDriveChange(file.connectedAccount, async () => {
+      const parentId = await driveParentForFolder(file.connectedAccount, folder, appFolderIds)
+      if (parentId) await moveGoogleFile(file.connectedAccount, file.providerFileId, parentId)
+    })
   }
 }
 
@@ -313,8 +315,10 @@ fileRouter.patch('/:id', async (req: AuthRequest, res, next) => {
     const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' }, include: { connectedAccount: true } })
     const targetFolder = body.folderId ? await prisma.folder.findFirstOrThrow({ where: { id: body.folderId, userId: req.user!.id, deletedAt: null } }) : null
     if (body.name && body.name !== file.name && file.provider === 'google_drive') {
-      const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(file.connectedAccount) })
-      await drive.files.update({ fileId: file.providerFileId, requestBody: { name: body.name } })
+      await applyDriveChange(file.connectedAccount, async () => {
+        const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(file.connectedAccount) })
+        await drive.files.update({ fileId: file.providerFileId, requestBody: { name: body.name } })
+      })
     }
     if (body.folderId !== undefined && (body.folderId ?? null) !== file.folderId) await createDriveMover()(file, targetFolder)
     const updated = await prisma.file.update({ where: { id: file.id }, data: { ...(body.name ? { name: body.name } : {}), ...(body.folderId !== undefined ? { folderId: body.folderId } : {}) }, include: { connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } }, folder: { select: { id: true, name: true } } } })

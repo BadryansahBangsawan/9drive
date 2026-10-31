@@ -5,7 +5,7 @@ import type { Folder } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { HttpError } from '../../middleware/error.middleware.js'
-import { driveParentForFolder, getAuthedGoogleClient, ensureGoogleAppFolder, googleDriveFolderMimeType, moveGoogleFile } from '../google/google.service.js'
+import { applyDriveChange, driveParentForFolder, getAuthedGoogleClient, ensureGoogleAppFolder, googleDriveFolderMimeType, moveGoogleFile } from '../google/google.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { defaultFolderColor, defaultFolderIconUrl } from './folder-defaults.js'
 
@@ -184,20 +184,25 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
 
     // A folder with a Drive mirror can only go where Drive can follow: a folder with a Drive
     // counterpart on the same account, or the app root (that account's 9drive folder).
+    // Drive is only kept in step while the bound account is connected (see applyDriveChange).
+    const account = folderRecord.providerFolderId && folderRecord.connectedAccount?.status === 'connected' ? folderRecord.connectedAccount : null
     let parentDriveId: string | null = null
-    if (moving && folderRecord.providerFolderId && folderRecord.connectedAccount) {
-      parentDriveId = await driveParentForFolder(folderRecord.connectedAccount, newParent)
+    if (moving && account) {
+      parentDriveId = (await applyDriveChange(account, () => driveParentForFolder(account, newParent))) ?? null
       if (!parentDriveId) return res.status(400).json({ code: 'FOLDER_MOVE_ACROSS_ACCOUNTS', message: 'This folder lives in a different Drive account than the target folder.' })
     }
 
     // Drive changes go first and fail the request: Google sync treats Drive as the source of
     // truth, so a change made only in the database would be undone on the next sync.
-    if ((renaming || moving) && folderRecord.providerFolderId && folderRecord.connectedAccount) {
+    if (account && folderRecord.providerFolderId) {
+      const driveFolderId = folderRecord.providerFolderId
       if (renaming) {
-        const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(folderRecord.connectedAccount) })
-        await drive.files.update({ fileId: folderRecord.providerFolderId, requestBody: { name: body.name } })
+        await applyDriveChange(account, async () => {
+          const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(account) })
+          await drive.files.update({ fileId: driveFolderId, requestBody: { name: body.name } })
+        })
       }
-      if (moving && parentDriveId) await moveGoogleFile(folderRecord.connectedAccount, folderRecord.providerFolderId, parentDriveId)
+      if (moving && parentDriveId) await applyDriveChange(account, () => moveGoogleFile(account, driveFolderId, parentDriveId!))
     }
 
     const folder = await prisma.folder.updateMany({

@@ -2,6 +2,7 @@ import { google } from './google-apis.js'
 import type { ConnectedAccount, Folder, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'
+import { HttpError } from '../../middleware/error.middleware.js'
 
 export const googleDriveFolderMimeType = 'application/vnd.google-apps.folder'
 const appFolderName = '9drive'
@@ -100,6 +101,19 @@ export async function driveParentForFolder(account: ConnectedAccount, folder: Pi
   if (!appFolderCache) return ensureGoogleAppFolder(account)
   if (!appFolderCache.has(account.id)) appFolderCache.set(account.id, ensureGoogleAppFolder(account))
   return appFolderCache.get(account.id)!
+}
+
+// Runs a Drive change that mirrors an in-app edit (rename, move). For a disconnected account it is
+// skipped: sync doesn't run for that account, so the in-app edit stands on its own. On a connected
+// account a Drive failure fails the request, because the next sync would otherwise undo the edit.
+export async function applyDriveChange<T>(account: ConnectedAccount | null | undefined, change: () => Promise<T>): Promise<T | undefined> {
+  if (!account || account.status !== 'connected') return undefined
+  try {
+    return await change()
+  } catch (error) {
+    console.error('[drive] change failed', { accountId: account.id, message: error instanceof Error ? error.message : String(error) })
+    throw new HttpError(502, 'DRIVE_UPDATE_FAILED', 'Google Drive rejected this change. Reconnect the account in Settings and try again.')
+  }
 }
 
 // Moves a Drive file so `targetParentId` is its only parent. No-op when it already is.
