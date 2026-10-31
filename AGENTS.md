@@ -149,9 +149,11 @@ Frontend conventions:
 - Use `apiFetch` for normal JSON API calls.
 - Use raw `fetch` or `XMLHttpRequest` only when response streaming/blob/progress requires it.
 - Keep access/refresh token handling centralized in `frontend/src/lib/api.ts` and `frontend/src/lib/auth.ts`.
-- Use existing `Button`, `Card`, and `Input` primitives before adding new UI primitives.
+- Style with the semantic token utilities defined in `frontend/src/style.css` (`@theme inline`): `bg-bg`, `bg-surface`, `bg-hover`, `bg-selected`, `border-border`, `text-text`, `text-muted`, `text-subtle`, `bg-primary`/`text-primary-fg`, `accent`, `accent-soft`, `drive`, `s3`, `folder`, `danger`. Do not use Tailwind palette classes (e.g. `bg-blue-600`) or hex colors in components.
+- Do not use `!important` overrides, gradients, or glass/blur effects.
+- Theme preference is `localStorage['9drive:theme']` = `light` | `dark` | `system`, managed by `frontend/src/lib/theme.ts`.
+- Reuse primitives in `frontend/src/components/ui/` (`Button`, `Input`, `Card`, `Badge`, `Segmented`, `Checkbox`, `Switch`, `Dialog`, `Menu`, `EmptyState`) before adding new UI primitives.
 - Use `cn` from `frontend/src/lib/utils.ts` for conditional class names.
-- Preserve current Tailwind visual style unless task explicitly asks redesign.
 - Keep protected dashboard pages inside `ProtectedRoute` and `DriveLayout`.
 - Keep file/folder URL state in query params when it affects navigation, e.g. `folderId` and file search `q`.
 
