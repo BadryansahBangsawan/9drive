@@ -32,6 +32,7 @@ import { apiFetch, formatBytes } from '@/lib/api'
 import { useUpload } from '@/context/UploadContext'
 import { clearAuthSession, getStoredUser, updateStoredUser, type AuthUser } from '@/lib/auth'
 import { getGravatarUrl } from '@/lib/gravatar'
+import { setThemePreference } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 const menu = [
@@ -217,11 +218,9 @@ export function DriveLayout() {
   const [headerActions, setHeaderActions] = useState<ReactNode>(null)
   const { uploadProgress, setUploadProgress, retryFailedUpload } = useUpload()
   const [uploadProgressCollapsed, setUploadProgressCollapsed] = useState(false)
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('9drive:theme')
-    if (saved === 'light' || saved === 'dark') return saved
-    return 'dark'
-  })
+  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+    document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+  )
 
   // Advanced search states
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
@@ -245,20 +244,10 @@ export function DriveLayout() {
     return raw ? raw.split('T')[0] : ''
   })
 
-  useEffect(() => {
-    const root = document.documentElement
-    if (theme === 'dark') {
-      root.classList.add('dark')
-      root.classList.remove('light')
-    } else {
-      root.classList.add('light')
-      root.classList.remove('dark')
-    }
-    localStorage.setItem('9drive:theme', theme)
-  }, [theme])
-
   function toggleTheme() {
-    setTheme((t) => (t === 'light' ? 'dark' : 'light'))
+    const next = theme === 'light' ? 'dark' : 'light'
+    setThemePreference(next)
+    setTheme(next)
   }
 
   async function loadSidebarStats() {
