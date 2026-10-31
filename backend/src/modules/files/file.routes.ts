@@ -309,10 +309,12 @@ fileRouter.patch('/:id', async (req: AuthRequest, res, next) => {
   try {
     const body = z.object({ name: z.string().min(1).max(255).optional(), folderId: z.string().nullable().optional() }).parse(req.body)
     const fileId = String(req.params.id)
-    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id }, include: { connectedAccount: true } })
-    const drive = file.provider === 's3' ? null : google.drive({ version: 'v3', auth: await getAuthedGoogleClient(file.connectedAccount) })
+    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' }, include: { connectedAccount: true } })
     const targetFolder = body.folderId ? await prisma.folder.findFirstOrThrow({ where: { id: body.folderId, userId: req.user!.id, deletedAt: null } }) : null
-    if (body.name && drive) await drive.files.update({ fileId: file.providerFileId, requestBody: { name: body.name } })
+    if (body.name && body.name !== file.name && file.provider === 'google_drive') {
+      const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(file.connectedAccount) })
+      await drive.files.update({ fileId: file.providerFileId, requestBody: { name: body.name } })
+    }
     if (body.folderId !== undefined && (body.folderId ?? null) !== file.folderId) await createDriveMover()(file, targetFolder)
     const updated = await prisma.file.update({ where: { id: file.id }, data: { ...(body.name ? { name: body.name } : {}), ...(body.folderId !== undefined ? { folderId: body.folderId } : {}) }, include: { connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } }, folder: { select: { id: true, name: true } } } })
     await createAuditLog(req.user!.id, 'UPDATE_FILE', 'file', updated.id, { name: updated.name, updates: body })
