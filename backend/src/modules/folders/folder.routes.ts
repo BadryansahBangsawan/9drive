@@ -5,7 +5,7 @@ import type { Folder } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { HttpError } from '../../middleware/error.middleware.js'
-import { getAuthedGoogleClient, ensureGoogleAppFolder, moveGoogleFile } from '../google/google.service.js'
+import { getAuthedGoogleClient, ensureGoogleAppFolder, googleDriveFolderMimeType, moveGoogleFile } from '../google/google.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { defaultFolderColor, defaultFolderIconUrl } from './folder-defaults.js'
 
@@ -54,7 +54,7 @@ async function ensureProviderFolderIds(
       if (!target) return
       const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(target.account) })
       const driveFolder = await drive.files.create({
-        requestBody: { name: folder.name, mimeType: 'application/vnd.google-apps.folder', parents: [target.parentDriveId] },
+        requestBody: { name: folder.name, mimeType: googleDriveFolderMimeType, parents: [target.parentDriveId] },
         fields: 'id'
       })
       const gId = driveFolder.data.id ?? null
@@ -118,7 +118,7 @@ folderRouter.post('/', async (req: AuthRequest, res, next) => {
         connectedAccountId = target.account.id
         const drive = google.drive({ version: 'v3', auth: await getAuthedGoogleClient(target.account) })
         const driveFolder = await drive.files.create({
-          requestBody: { name: body.name, mimeType: 'application/vnd.google-apps.folder', parents: [target.parentDriveId] },
+          requestBody: { name: body.name, mimeType: googleDriveFolderMimeType, parents: [target.parentDriveId] },
           fields: 'id'
         })
         providerFolderId = driveFolder.data.id ?? null

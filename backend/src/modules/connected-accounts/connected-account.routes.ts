@@ -178,7 +178,7 @@ connectedAccountRouter.get('/google/connect', requireAuth, async (req: AuthReque
   }
 })
 
-connectedAccountRouter.get('/google/callback', async (req, res, next) => {
+connectedAccountRouter.get('/google/callback', async (req, res) => {
   try {
     const query = z.object({ code: z.string(), state: z.string() }).parse(req.query)
     const oauthState = await prisma.oauthState.findUniqueOrThrow({ where: { stateHash: hashToken(query.state) }, include: { providerConfig: true } })

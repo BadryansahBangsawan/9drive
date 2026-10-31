@@ -3,7 +3,7 @@ import type { ConnectedAccount, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'
 
-const googleDriveFolderMimeType = 'application/vnd.google-apps.folder'
+export const googleDriveFolderMimeType = 'application/vnd.google-apps.folder'
 const appFolderName = '9drive'
 
 export function createOAuthClient(config: ProviderConfig) {

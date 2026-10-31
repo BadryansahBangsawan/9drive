@@ -409,7 +409,7 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
 })
 
 // 2. Query/Resume resumable status
-uploadRouter.get('/resumable/status/:id', requireAuth, async (req: AuthRequest, res, next) => {
+uploadRouter.get('/resumable/status/:id', requireAuth, async (req: AuthRequest, res) => {
   try {
     const session = await prisma.uploadSession.findFirstOrThrow({
       where: { id: String(req.params.id), userId: req.user!.id }

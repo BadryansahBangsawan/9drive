@@ -7,10 +7,30 @@
 # by the new backend once it is up (markUpdateCompleted in backend/src/utils/app-version.ts), so the
 # UI doesn't report success before the new version is serving.
 #
+# A failed run must leave the running version intact: nothing it serves (backend dist, database
+# schema) changes until both builds have succeeded.
+#
 # Docker installs don't use this: the backend container has no git, and the route says so.
 set -Eeuo pipefail
 
-# Everything is inside a function so bash has read the whole script before `git pull` replaces it.
+# Everything is inside functions so bash has read the whole script before `git pull` replaces it.
+
+lock_hash() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+# (Re)install a package's dependencies when its lockfile differs from the one last installed.
+# --include=dev: the service runs with NODE_ENV=production, which would otherwise make npm skip
+# the devDependencies the build needs (TypeScript, @types/*, Vite).
+install_deps() {
+  local dir="$1" marker="$1/node_modules/.9drive-lock-hash" hash
+  hash="$(lock_hash "$dir/package-lock.json")"
+  if [ "$(cat "$marker" 2>/dev/null || true)" != "$hash" ]; then
+    (cd "$dir" && npm ci --include=dev --no-audit --no-fund)
+    echo "$hash" >"$marker"
+  fi
+}
+
 main() {
   local root
   root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,15 +48,21 @@ main() {
   echo "Code: ${before:0:7} -> ${after:0:7}"
 
   echo "--- backend"
+  install_deps "$root/backend"
   cd "$root/backend"
-  if [ ! -d node_modules ] || ! git diff --quiet "$before" "$after" -- package-lock.json; then npm ci --no-audit --no-fund; fi
-  npx prisma generate
-  npx prisma migrate deploy
-  npx tsc
+  npx --no-install prisma generate
+  # --noEmitOnError: a type error must not leave new code in dist/ next to the running build.
+  npx --no-install tsc --noEmitOnError
+
   echo "--- frontend"
+  install_deps "$root/frontend"
   cd "$root/frontend"
-  if [ ! -d node_modules ] || ! git diff --quiet "$before" "$after" -- package-lock.json; then npm ci --no-audit --no-fund; fi
   npm run build
+
+  # Migrate last, so a failed build leaves the running backend on the schema it expects.
+  echo "--- database"
+  cd "$root/backend"
+  npx --no-install prisma migrate deploy
 
   echo "Built version $(node -p "require('$root/backend/package.json').version")"
   touch "$root/.update-pending"

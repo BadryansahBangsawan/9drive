@@ -7,6 +7,7 @@ import { requireAuth } from '../../middleware/auth.middleware.js'
 import { requireAdmin } from '../../middleware/admin.middleware.js'
 import { prisma } from '../../config/prisma.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'
+import { repoRoot } from '../../utils/app-version.js'
 
 // Instance-wide settings and maintenance. Admin only.
 export const systemRouter = Router()
@@ -19,7 +20,7 @@ const googleConfigSchema = z.object({
 })
 
 systemRouter.post('/update', (_req, res) => {
-  const projectRoot = path.resolve(process.cwd(), '..')
+  const projectRoot = repoRoot
   const updateScript = path.join(projectRoot, 'update.sh')
 
   exec('git --version', (gitError) => {
@@ -60,7 +61,7 @@ systemRouter.post('/update', (_req, res) => {
 })
 
 systemRouter.get('/update-log', (_req, res) => {
-  const logFile = path.join(path.resolve(process.cwd(), '..'), 'update.log')
+  const logFile = path.join(repoRoot, 'update.log')
   if (!fs.existsSync(logFile)) return res.json({ log: 'No update history found.' })
   try {
     return res.json({ log: fs.readFileSync(logFile, 'utf8') })

@@ -4,7 +4,7 @@ import { prisma } from '../../config/prisma.js'
 import { accountLabel } from '../../utils/account-label.js'
 import { googleDownloadExportMimeTypes } from '../files/stream-google-file.js'
 import { defaultFolderColor, defaultFolderIconUrl, type FolderSource } from '../folders/folder-defaults.js'
-import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from './google.service.js'
+import { ensureGoogleAppFolder, getAuthedGoogleClient, googleDriveFolderMimeType as FOLDER_MIME, syncGoogleQuota } from './google.service.js'
 
 // Imports everything a connected Google account owns in My Drive into 9drive:
 // - the `9drive` app folder is the app root (where 9drive uploads go); its subfolders are app folders;
@@ -13,7 +13,6 @@ import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '.
 // Drive is the source of truth for names and placement, except placements Drive can't represent
 // (see keepsAppFolder) and anything the user deleted in 9drive, which stays out until restored.
 
-const FOLDER_MIME = 'application/vnd.google-apps.folder'
 const GOOGLE_APPS_PREFIX = 'application/vnd.google-apps.'
 const CREATE_BATCH = 500
 const HIDDEN = Symbol('hidden')
