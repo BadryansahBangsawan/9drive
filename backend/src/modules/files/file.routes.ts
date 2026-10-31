@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { google } from 'googleapis'
+import { google } from '../google/google-apis.js'
 import { z } from 'zod'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { google } from 'googleapis'
+import { google } from '../google/google-apis.js'
 import { z } from 'zod'
 import type { Folder } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'

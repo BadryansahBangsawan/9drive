@@ -1,4 +1,4 @@
-import type { Auth } from 'googleapis'
+import type { Credentials } from '../google/google-apis.js'
 import type { OauthState, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { syncGoogleDriveInBackground } from '../google/drive-sync.js'
@@ -37,7 +37,7 @@ async function upsertGoogleUser(email: string, name: string) {
 }
 
 // Completes the "login" OAuth flow and returns a one-time handoff token, or null on failure.
-export async function completeGoogleLogin(oauthState: OauthState & { providerConfig: ProviderConfig }, tokens: Auth.Credentials, profile: GoogleProfile) {
+export async function completeGoogleLogin(oauthState: OauthState & { providerConfig: ProviderConfig }, tokens: Credentials, profile: GoogleProfile) {
   const providerAccountId = profile.id
   const email = profile.email
   if (!providerAccountId || !email || !tokens.access_token) return null

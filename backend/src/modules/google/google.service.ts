@@ -1,4 +1,4 @@
-import { google } from 'googleapis'
+import { google } from './google-apis.js'
 import type { ConnectedAccount, ProviderConfig } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'

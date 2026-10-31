@@ -1,4 +1,4 @@
-import { google, type drive_v3 } from 'googleapis'
+import { google, type drive_v3 } from './google-apis.js'
 import type { ConnectedAccount, Folder, Prisma } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { accountLabel } from '../../utils/account-label.js'
