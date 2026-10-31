@@ -1,56 +1,87 @@
-import { useEffect, useState } from 'react'
-import { CheckCircle, Cloud, Database, Filter, Gauge, Link2, RefreshCw } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { ArrowDown, ArrowUp, Cloud, Database, MoreHorizontal, RefreshCw, Trash2 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Dialog } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Input } from '@/components/ui/input'
+import { Menu, MenuItem } from '@/components/ui/menu'
 import { PageHeader } from '@/components/drive/PageHeader'
+import { useDriveLayoutActions } from '@/layouts/DriveLayout'
+import { accountLabel } from '@/lib/accounts'
 import { apiFetch, formatBytes } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type StorageSummary = { totalBytes: string; usedBytes: string; availableBytes: string }
-type ConnectedAccount = { id: string; email: string; displayName?: string | null; provider: string; status: string; storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null }
+type StorageSummary = { totalBytes: string | null; usedBytes: string; availableBytes: string | null }
+type ConnectedAccount = {
+  id: string
+  email: string
+  displayName?: string | null
+  provider: string
+  status: string
+  lastError?: string | null
+  storageAccount?: { totalBytes: string | null; usedBytes: string; availableBytes: string | null; lastSyncedAt: string | null } | null
+}
 type RoutingMode = 'most_available' | 'round_robin' | 'priority'
-type RoutingPolicy = { mode: RoutingMode; priorityAccountIds: string[]; roundRobinCursor: number }
+type RoutingPolicy = { mode: RoutingMode; priorityAccountIds: string[] }
 
-function providerLabel(provider: string) {
-  if (provider === 's3') return 'S3 Storage'
-  return 'Google Drive'
+const DANGER_THRESHOLD = 85
+const EMPTY_S3 = { name: '', bucket: '', region: 'us-east-1', endpoint: '', accessKeyId: '', secretAccessKey: '', forcePathStyle: false, quotaBytes: '' }
+
+const ROUTING_OPTIONS: { mode: RoutingMode; title: string; description: string }[] = [
+  { mode: 'most_available', title: 'Most available', description: 'Send each upload to the account with the most free space.' },
+  { mode: 'round_robin', title: 'Round robin', description: 'Rotate through accounts so usage stays even.' },
+  { mode: 'priority', title: 'Priority order', description: 'Fill accounts in the order you set below.' },
+]
+
+function notifyStorageChanged() {
+  window.dispatchEvent(new Event('9drive:storage-changed'))
 }
 
-function ProviderIcon({ provider }: { provider: string }) {
-  const Icon = provider === 's3' ? Database : Cloud
-  return <Icon className="h-6 w-6" />
-}
-
-function storageLimitLabel(account: ConnectedAccount) {
-  if (account.provider === 's3' && account.storageAccount?.totalBytes === null) return 'Unlimited'
-  return formatBytes(account.storageAccount?.totalBytes)
-}
-
-function availableLabel(account: ConnectedAccount) {
-  if (account.provider === 's3' && account.storageAccount?.availableBytes === null) return 'Unlimited'
-  return formatBytes(account.storageAccount?.availableBytes)
-}
-
-function pct(account: ConnectedAccount) {
+function usedPercent(account: ConnectedAccount): number | null {
   const total = Number(account.storageAccount?.totalBytes ?? 0)
-  const used = Number(account.storageAccount?.usedBytes ?? 0)
-  return total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0
+  if (!account.storageAccount?.totalBytes || !(total > 0)) return null
+  return Math.min(100, (Number(account.storageAccount.usedBytes) / total) * 100)
 }
 
-function statusColor(percent: number) {
-  if (percent >= 80) return 'bg-red-500 text-red-600'
-  if (percent >= 50) return 'bg-yellow-400 text-yellow-600'
-  return 'bg-emerald-500 text-emerald-600'
+function syncedAgo(value: string | null | undefined) {
+  if (!value) return 'never synced'
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000))
+  if (seconds < 60) return 'synced just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `synced ${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `synced ${hours}h ago`
+  return `synced ${Math.floor(hours / 24)}d ago`
+}
+
+function ProviderTile({ provider }: { provider: string }) {
+  const Icon = provider === 's3' ? Database : Cloud
+  return (
+    <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface', provider === 's3' ? 'text-s3' : 'text-drive')} aria-hidden="true">
+      <Icon className="h-4 w-4" strokeWidth={1.5} />
+    </span>
+  )
 }
 
 export function QuotaTrackerPage() {
+  const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
   const [summary, setSummary] = useState<StorageSummary | null>(null)
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
-  const [routingPolicy, setRoutingPolicy] = useState<RoutingPolicy>({ mode: 'most_available', priorityAccountIds: [], roundRobinCursor: 0 })
+  const [policy, setPolicy] = useState<RoutingPolicy>({ mode: 'most_available', priorityAccountIds: [] })
+  const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
-  const [autoRefresh, setAutoRefresh] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-  const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [connecting, setConnecting] = useState(false)
+  const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ account: ConnectedAccount; x: number; y: number } | null>(null)
+  const [toDisconnect, setToDisconnect] = useState<ConnectedAccount | null>(null)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [s3Open, setS3Open] = useState(false)
+  const [s3Form, setS3Form] = useState(EMPTY_S3)
+  const [s3Error, setS3Error] = useState('')
+  const [connectingS3, setConnectingS3] = useState(false)
 
   async function load() {
     const [summaryData, accountData, policyData] = await Promise.all([
@@ -60,161 +91,308 @@ export function QuotaTrackerPage() {
     ])
     setSummary(summaryData)
     setAccounts(accountData.accounts)
-    setRoutingPolicy(policyData.policy)
-  }
-
-  async function refresh() {
-    setRefreshing(true)
-    try {
-      await load()
-    } finally {
-      setRefreshing(false)
-    }
+    setPolicy({ mode: policyData.policy.mode, priorityAccountIds: policyData.policy.priorityAccountIds })
   }
 
   useEffect(() => {
-    load().catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to load quota tracker'))
+    setBreadcrumb([{ label: 'Accounts & quota' }])
+    setHeaderActions(null)
+    load()
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load accounts'))
+      .finally(() => setLoading(false))
   }, [])
-
-  useEffect(() => {
-    if (!autoRefresh) return
-    const timer = window.setInterval(() => load().catch(() => undefined), 35_000)
-    return () => window.clearInterval(timer)
-  }, [autoRefresh])
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin || event.data?.type !== 'GOOGLE_CONNECTED') return
-      setMessage(event.data.status === 'success' ? 'Google Drive connected.' : 'Google Drive connection failed.')
-      load().catch(() => undefined)
+      if (event.data.status === 'success') {
+        setError('')
+        setMessage('Google Drive connected.')
+      } else {
+        setMessage('')
+        setError('Google Drive connection failed.')
+      }
+      load().then(notifyStorageChanged).catch(() => undefined)
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
   async function connectDrive() {
+    setConnecting(true)
+    setError('')
+    setMessage('')
     const popup = window.open('', 'google-drive-connect', 'width=540,height=720')
     if (popup) {
       popup.document.write('<html><head><title>Connecting...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#64748b;}</style></head><body><div style="text-align:center;"><h2>Connecting to Google...</h2><p>Please wait while we redirect you.</p></div></body></html>')
     }
     try {
       const data = await apiFetch<{ url: string }>('/connected-accounts/google/connect-url')
-      if (popup) {
-        popup.location.href = data.url
-      } else {
-        window.location.href = data.url
-      }
-    } catch (e) {
+      if (popup) popup.location.href = data.url
+      else window.location.href = data.url
+    } catch (err) {
       if (popup) popup.close()
-      console.error('Failed to start Google Drive connection from Quota Tracker', e)
+      setError(err instanceof Error ? err.message : 'Failed to start Google Drive connection')
+    } finally {
+      setConnecting(false)
+    }
+  }
+
+  async function connectS3(event: FormEvent) {
+    event.preventDefault()
+    setConnectingS3(true)
+    setS3Error('')
+    try {
+      await apiFetch('/connected-accounts/s3', { method: 'POST', body: JSON.stringify({ ...s3Form, endpoint: s3Form.endpoint || undefined, quotaBytes: s3Form.quotaBytes || null }) })
+      setS3Open(false)
+      setS3Form(EMPTY_S3)
+      setMessage('S3 storage connected.')
+      await load()
+      notifyStorageChanged()
+    } catch (err) {
+      setS3Error(err instanceof Error ? err.message : 'Failed to connect S3 storage')
+    } finally {
+      setConnectingS3(false)
     }
   }
 
   async function sync(accountId: string) {
-    setSyncingAccountId(accountId)
+    setSyncingId(accountId)
+    setError('')
     try {
       await apiFetch(`/connected-accounts/${accountId}/sync-quota`, { method: 'POST' })
       await load()
+      notifyStorageChanged()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sync quota')
     } finally {
-      setSyncingAccountId(null)
+      setSyncingId(null)
     }
   }
 
-  async function saveRoutingPolicy(nextPolicy: RoutingPolicy) {
-    setRoutingPolicy(nextPolicy)
-    const data = await apiFetch<{ policy: RoutingPolicy }>('/storage/routing-policy', { method: 'PATCH', body: JSON.stringify({ mode: nextPolicy.mode, priorityAccountIds: nextPolicy.priorityAccountIds }) })
-    setRoutingPolicy(data.policy)
-    setMessage('Upload routing policy updated.')
+  async function disconnect() {
+    if (!toDisconnect) return
+    setDisconnecting(true)
+    setError('')
+    try {
+      await apiFetch(`/connected-accounts/${toDisconnect.id}`, { method: 'DELETE' })
+      setToDisconnect(null)
+      setMessage('Storage account disconnected.')
+      await load()
+      notifyStorageChanged()
+    } catch (err) {
+      setToDisconnect(null)
+      setError(err instanceof Error ? err.message : 'Failed to disconnect account')
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
+  async function savePolicy(next: RoutingPolicy) {
+    const previous = policy
+    setPolicy(next)
+    setError('')
+    try {
+      const data = await apiFetch<{ policy: RoutingPolicy }>('/storage/routing-policy', { method: 'PATCH', body: JSON.stringify({ mode: next.mode, priorityAccountIds: next.priorityAccountIds }) })
+      setPolicy({ mode: data.policy.mode, priorityAccountIds: data.policy.priorityAccountIds })
+      setMessage('Upload routing updated.')
+    } catch (err) {
+      setPolicy(previous)
+      setError(err instanceof Error ? err.message : 'Failed to update routing policy')
+    }
   }
 
   function orderedAccounts() {
-    const byId = new Map(accounts.map((account) => [account.id, account]))
-    const ordered = routingPolicy.priorityAccountIds.map((id) => byId.get(id)).filter((account): account is ConnectedAccount => Boolean(account))
-    const orderedIds = new Set(ordered.map((account) => account.id))
-    return [...ordered, ...accounts.filter((account) => !orderedIds.has(account.id))]
+    const byId = new Map(accounts.map((a) => [a.id, a]))
+    const ordered = policy.priorityAccountIds.map((id) => byId.get(id)).filter((a): a is ConnectedAccount => Boolean(a))
+    const seen = new Set(ordered.map((a) => a.id))
+    return [...ordered, ...accounts.filter((a) => !seen.has(a.id))]
   }
 
-  function moveAccount(accountId: string, direction: -1 | 1) {
-    const ids = orderedAccounts().map((account) => account.id)
+  function move(accountId: string, direction: -1 | 1) {
+    const ids = orderedAccounts().map((a) => a.id)
     const index = ids.indexOf(accountId)
     const target = index + direction
     if (index < 0 || target < 0 || target >= ids.length) return
-    const nextIds = [...ids]
-    const [item] = nextIds.splice(index, 1)
-    nextIds.splice(target, 0, item)
-    saveRoutingPolicy({ ...routingPolicy, priorityAccountIds: nextIds }).catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to update routing policy'))
+    const next = [...ids]
+    const [item] = next.splice(index, 1)
+    next.splice(target, 0, item)
+    savePolicy({ ...policy, priorityAccountIds: next }).catch(() => undefined)
   }
+
+  const connectActions = (
+    <>
+      <Button variant="secondary" onClick={() => { setS3Error(''); setS3Open(true) }}><Database className="h-4 w-4" strokeWidth={1.5} />Connect S3</Button>
+      <Button onClick={connectDrive} disabled={connecting}><Cloud className="h-4 w-4" strokeWidth={1.5} />{connecting ? 'Opening...' : 'Connect Drive'}</Button>
+    </>
+  )
+
+  const usedTotal = accounts.reduce((sum, a) => sum + Number(a.storageAccount?.usedBytes ?? 0), 0)
+  const capacity = summary?.totalBytes != null ? Number(summary.totalBytes) : null
+  const barBase = capacity && capacity > 0 ? Math.max(capacity, usedTotal) : usedTotal
+  const ordered = orderedAccounts()
 
   return (
     <>
-      <PageHeader title="Quota Tracker" description="Track and manage connected provider storage limits." actions={<><Button variant="outline" onClick={() => setAutoRefresh(!autoRefresh)}><CheckCircle className="h-4 w-4" />Auto-refresh {autoRefresh ? 'On' : 'Off'}</Button><Button variant="outline" onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />{refreshing ? 'Refreshing...' : 'Refresh'}</Button><Button onClick={connectDrive}><Link2 className="h-4 w-4" />Connect Drive</Button></>} />
-      {message ? <p className="mt-5 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
+      <PageHeader title="Accounts & quota" description="Connected storage, capacity, and where new uploads go." actions={connectActions} />
+      {error ? <p role="alert" className="mt-5 rounded-[10px] border border-danger px-4 py-3 text-[13px] text-danger">{error}</p> : null}
+      {message ? <p role="status" className="mt-5 rounded-[10px] border border-border bg-surface px-4 py-3 text-[13px] text-text">{message}</p> : null}
 
-      <div className="mt-8 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
-        <Card className="p-5"><p className="text-sm text-slate-500">Total Storage</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.totalBytes)}</p></Card>
-        <Card className="p-5"><p className="text-sm text-slate-500">Used Storage</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.usedBytes)}</p></Card>
-        <Card className="p-5"><p className="text-sm text-slate-500">Available</p><p className="mt-2 text-2xl font-extrabold">{formatBytes(summary?.availableBytes)}</p></Card>
-        <Card className="p-5"><p className="text-sm text-slate-500">Accounts</p><p className="mt-2 text-2xl font-extrabold">{accounts.length}</p></Card>
-      </div>
-
-      <div className="mt-8 flex flex-wrap items-center gap-3">
-        <Button variant="outline"><Filter className="h-4 w-4" />All Providers</Button>
-        <Button variant="outline">All Accounts</Button>
-        <Button variant="soft"><Gauge className="h-4 w-4" />Most available</Button>
-      </div>
-
-      <Card className="mt-6 p-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2 className="text-lg font-extrabold">Upload Routing</h2>
-            <p className="mt-1 text-sm text-slate-500">Choose how new uploads pick connected storage accounts.</p>
-          </div>
-          <label className="grid gap-2 text-sm font-semibold lg:w-64">Routing mode<select className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm" value={routingPolicy.mode} onChange={(event) => saveRoutingPolicy({ ...routingPolicy, mode: event.target.value as RoutingMode }).catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to update routing policy'))}><option value="most_available">Most available</option><option value="round_robin">Round robin</option><option value="priority">Priority order</option></select></label>
-        </div>
-        <div className="mt-4 grid gap-3">
-          {orderedAccounts().map((account, index) => <div key={account.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-blue-600"><ProviderIcon provider={account.provider} /></div>
-              <div><p className="font-semibold">{account.displayName || account.email}</p><p className="text-sm text-slate-500">{providerLabel(account.provider)} · {formatBytes(account.storageAccount?.usedBytes)} used · {availableLabel(account)} free</p></div>
-            </div>
-            <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => moveAccount(account.id, -1)} disabled={index === 0}>Up</Button><Button variant="outline" size="sm" onClick={() => moveAccount(account.id, 1)} disabled={index === accounts.length - 1}>Down</Button></div>
-          </div>)}
-          {accounts.length === 0 ? <p className="text-sm text-slate-500">Connect storage accounts to configure routing.</p> : null}
-        </div>
-      </Card>
-
-      <div className="mt-6 grid gap-5 md:grid-cols-2">
-        {accounts.length === 0 ? (
-          <Card className="col-span-full p-8 text-center">
-            <Cloud className="mx-auto h-10 w-10 text-blue-600" />
-            <h2 className="mt-4 text-xl font-extrabold">No connected drives</h2>
-            <p className="mt-2 text-sm text-slate-500">Connect Google Drive or S3-compatible storage to start tracking quota.</p>
-            <Button className="mt-5" onClick={connectDrive}><Link2 className="h-4 w-4" />Connect Drive</Button>
-          </Card>
-        ) : accounts.map((account) => {
-          const percent = pct(account)
-          const color = statusColor(percent)
-          return (
-            <Card key={account.id} className="overflow-hidden p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white"><ProviderIcon provider={account.provider} /></div>
-                  <div><h2 className="font-extrabold">{providerLabel(account.provider)}</h2><p className="text-sm text-slate-500">{account.email}</p></div>
-                </div>
-                <div className="flex gap-2"><Button variant="outline" size="icon" onClick={() => sync(account.id)} disabled={syncingAccountId === account.id}><RefreshCw className={syncingAccountId === account.id ? 'h-5 w-5 animate-spin' : 'h-5 w-5'} /></Button></div>
+      {loading ? (
+        <p className="mt-10 text-center text-[13px] text-muted">Loading accounts…</p>
+      ) : accounts.length === 0 ? (
+        <EmptyState
+          icon={<Cloud className="h-4 w-4" strokeWidth={1.5} />}
+          title="No connected storage"
+          description="Connect Google Drive or S3-compatible storage to start uploading."
+          action={<div className="flex flex-wrap justify-center gap-2">{connectActions}</div>}
+        />
+      ) : (
+        <>
+          <section aria-label="Summary" className="mt-6">
+            <Card className="p-5">
+              <div className="grid grid-cols-3 gap-4">
+                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Used</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{formatBytes(summary?.usedBytes)}</p></div>
+                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Free</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{summary?.availableBytes === null ? 'Unlimited' : formatBytes(summary?.availableBytes)}</p></div>
+                <div><p className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Total capacity</p><p className="mt-1 text-[22px] font-semibold tabular-nums text-text">{summary?.totalBytes === null ? 'Unlimited' : formatBytes(summary?.totalBytes)}</p></div>
               </div>
-              <div className="mt-6">
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 font-semibold"><span className={cn('h-3 w-3 rounded-full', color.split(' ')[0])} />storage</span>
-                  <span className="font-bold">{percent}%</span>
-                </div>
-                <div className="h-2 rounded-full bg-slate-100"><div className={cn('h-full rounded-full', color.split(' ')[0])} style={{ width: `${percent}%` }} /></div>
-                <div className="mt-3 flex items-center justify-between text-sm text-slate-500"><span>{formatBytes(account.storageAccount?.usedBytes)} / {storageLimitLabel(account)}</span><span>Available {availableLabel(account)}</span></div>
+              <div className="mt-4 flex h-2 overflow-hidden rounded-full bg-selected" role="img" aria-label="Usage by account">
+                {barBase > 0 ? accounts.map((a) => {
+                  const width = (Number(a.storageAccount?.usedBytes ?? 0) / barBase) * 100
+                  return width > 0 ? <span key={a.id} style={{ width: `${width}%` }} className={cn('h-full border-r border-bg last:border-r-0', a.provider === 's3' ? 'bg-s3' : 'bg-drive')} title={`${accountLabel(a)}: ${formatBytes(a.storageAccount?.usedBytes)}`} /> : null
+                }) : null}
               </div>
+              <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+                {accounts.map((a) => (
+                  <li key={a.id} className="flex min-w-0 max-w-full items-center gap-2 text-[12px] text-muted">
+                    <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', a.provider === 's3' ? 'bg-s3' : 'bg-drive')} aria-hidden="true" />
+                    <span className="truncate">{accountLabel(a)}</span>
+                    <span className="tabular-nums text-subtle">{formatBytes(a.storageAccount?.usedBytes)}</span>
+                  </li>
+                ))}
+              </ul>
             </Card>
-          )
-        })}
-      </div>
+          </section>
+
+          <section aria-label="Accounts" className="mt-6">
+            <h2 className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Accounts</h2>
+            <Card className="divide-y divide-border">
+              {accounts.map((account) => {
+                const percent = usedPercent(account)
+                const danger = percent !== null && percent >= DANGER_THRESHOLD
+                const unlimited = account.provider === 's3' && account.storageAccount?.totalBytes === null
+                return (
+                  <div key={account.id} className="flex items-center gap-3 px-4 py-3">
+                    <ProviderTile provider={account.provider} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-[13px] font-medium text-text">{account.provider === 's3' ? account.displayName || account.email : 'Google Drive'}</p>
+                        {account.status !== 'active' && account.status !== 'connected' ? <Badge>{account.status}</Badge> : null}
+                      </div>
+                      <p className="truncate text-[12px] text-muted" title={account.email}>{account.email} · {syncedAgo(account.storageAccount?.lastSyncedAt)}</p>
+                      {account.lastError ? <p className="truncate text-[12px] text-danger" title={account.lastError}>{account.lastError}</p> : null}
+                    </div>
+                    <div className="hidden w-56 shrink-0 sm:block">
+                      <div className="h-1.5 overflow-hidden rounded-full bg-selected">
+                        {percent !== null ? <div className={cn('h-full rounded-full', danger ? 'bg-danger' : 'bg-primary')} style={{ width: `${percent}%` }} /> : null}
+                      </div>
+                      <p className={cn('mt-1 text-[12px] tabular-nums', danger ? 'text-danger' : 'text-muted')}>
+                        {formatBytes(account.storageAccount?.usedBytes)} / {unlimited ? 'Unlimited' : formatBytes(account.storageAccount?.totalBytes)}{percent !== null ? ` · ${Math.round(percent)}%` : ''}
+                      </p>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={() => sync(account.id)} disabled={syncingId === account.id}>
+                      <RefreshCw className={cn('h-3.5 w-3.5', syncingId === account.id && 'animate-spin')} strokeWidth={1.5} />Sync
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`More actions for ${account.email}`}
+                      aria-haspopup="menu"
+                      onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ account, x: r.right - 200, y: r.bottom + 4 }) }}
+                    >
+                      <MoreHorizontal className="h-4 w-4" strokeWidth={1.5} />
+                    </Button>
+                  </div>
+                )
+              })}
+            </Card>
+          </section>
+
+          <section aria-label="Upload routing" className="mt-6">
+            <h2 className="text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Upload routing</h2>
+            <p className="mb-2 mt-0.5 text-[13px] text-muted">Choose how new uploads pick a storage account.</p>
+            <div role="radiogroup" aria-label="Upload routing mode" className="grid gap-3 md:grid-cols-3">
+              {ROUTING_OPTIONS.map((option) => {
+                const selected = policy.mode === option.mode
+                return (
+                  <button
+                    key={option.mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => { if (!selected) savePolicy({ ...policy, mode: option.mode }).catch(() => undefined) }}
+                    className={cn(
+                      'rounded-[10px] border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                      selected ? 'border-accent bg-accent-soft' : 'border-border bg-bg hover:bg-hover',
+                    )}
+                  >
+                    <p className="text-[13px] font-medium text-text">{option.title}</p>
+                    <p className="mt-1 text-[12px] text-muted">{option.description}</p>
+                  </button>
+                )
+              })}
+            </div>
+            {policy.mode === 'priority' ? (
+              <Card className="mt-3 divide-y divide-border">
+                {ordered.map((account, index) => (
+                  <div key={account.id} className="flex h-12 items-center gap-3 px-4">
+                    <span className="w-5 text-[12px] tabular-nums text-subtle">{index + 1}</span>
+                    <ProviderTile provider={account.provider} />
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-text" title={accountLabel(account)}>{accountLabel(account)}</span>
+                    <Button variant="ghost" size="icon" aria-label={`Move ${accountLabel(account)} up`} onClick={() => move(account.id, -1)} disabled={index === 0}><ArrowUp className="h-4 w-4" strokeWidth={1.5} /></Button>
+                    <Button variant="ghost" size="icon" aria-label={`Move ${accountLabel(account)} down`} onClick={() => move(account.id, 1)} disabled={index === ordered.length - 1}><ArrowDown className="h-4 w-4" strokeWidth={1.5} /></Button>
+                  </div>
+                ))}
+              </Card>
+            ) : null}
+          </section>
+        </>
+      )}
+
+      <Menu open={Boolean(menu)} x={menu?.x ?? 0} y={menu?.y ?? 0} onClose={() => setMenu(null)}>
+        <MenuItem icon={<Trash2 size={16} strokeWidth={1.5} />} danger onSelect={() => { setToDisconnect(menu?.account ?? null); setMenu(null) }}>Disconnect</MenuItem>
+      </Menu>
+
+      <Dialog
+        open={Boolean(toDisconnect)}
+        title="Disconnect storage?"
+        onClose={() => setToDisconnect(null)}
+        footer={<><Button variant="secondary" onClick={() => setToDisconnect(null)} disabled={disconnecting}>Cancel</Button><Button variant="danger" onClick={disconnect} disabled={disconnecting}>{disconnecting ? 'Disconnecting...' : 'Disconnect'}</Button></>}
+      >
+        <p className="text-[13px] text-muted">This removes the account from 9Drive. Files stored there may no longer be available.</p>
+        <p className="mt-3 truncate text-[13px] font-medium text-text" title={toDisconnect?.email}>{toDisconnect?.email}</p>
+        <p className="mt-0.5 text-[12px] tabular-nums text-muted">Used: {formatBytes(toDisconnect?.storageAccount?.usedBytes)}</p>
+      </Dialog>
+
+      <Dialog
+        open={s3Open}
+        title="Connect S3 storage"
+        onClose={() => setS3Open(false)}
+        footer={<><Button variant="secondary" onClick={() => setS3Open(false)} disabled={connectingS3}>Cancel</Button><Button type="submit" form="s3-connect-form" disabled={connectingS3}>{connectingS3 ? 'Connecting...' : 'Connect S3'}</Button></>}
+      >
+        <p className="mb-3 text-[13px] text-muted">Use any S3-compatible provider with custom endpoint support.</p>
+        <form id="s3-connect-form" className="grid gap-3" onSubmit={connectS3}>
+          <Input aria-label="Display name" placeholder="Display name" value={s3Form.name} onChange={(e) => setS3Form({ ...s3Form, name: e.target.value })} required />
+          <Input aria-label="Bucket" placeholder="Bucket" value={s3Form.bucket} onChange={(e) => setS3Form({ ...s3Form, bucket: e.target.value })} required />
+          <Input aria-label="Region" placeholder="Region" value={s3Form.region} onChange={(e) => setS3Form({ ...s3Form, region: e.target.value })} required />
+          <Input aria-label="Endpoint URL" placeholder="Endpoint URL (optional)" value={s3Form.endpoint} onChange={(e) => setS3Form({ ...s3Form, endpoint: e.target.value })} />
+          <Input aria-label="Access key ID" placeholder="Access key ID" value={s3Form.accessKeyId} onChange={(e) => setS3Form({ ...s3Form, accessKeyId: e.target.value })} required />
+          <Input aria-label="Secret access key" placeholder="Secret access key" type="password" value={s3Form.secretAccessKey} onChange={(e) => setS3Form({ ...s3Form, secretAccessKey: e.target.value })} required />
+          <Input aria-label="Quota in bytes" placeholder="Quota bytes (optional)" inputMode="numeric" value={s3Form.quotaBytes} onChange={(e) => setS3Form({ ...s3Form, quotaBytes: e.target.value })} />
+          <label className="flex items-center gap-2 text-[13px] text-text"><input type="checkbox" className="accent-accent" checked={s3Form.forcePathStyle} onChange={(e) => setS3Form({ ...s3Form, forcePathStyle: e.target.checked })} />Force path style</label>
+          {s3Error ? <p role="alert" className="text-[13px] text-danger">{s3Error}</p> : null}
+        </form>
+      </Dialog>
     </>
   )
 }
