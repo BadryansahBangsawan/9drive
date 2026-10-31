@@ -147,6 +147,10 @@ model ConnectedAccount {
   accessTokenEncrypted  String?         @map("access_token_encrypted") @db.Text
   refreshTokenEncrypted String?         @map("refresh_token_encrypted") @db.Text
   tokenExpiresAt        DateTime?       @map("token_expires_at")
+  // Google Drive changes feed: where the next incremental sync starts, and when the last full
+  // import ran (a full one runs at least daily). Cleared on disconnect.
+  driveChangesToken     String?         @map("drive_changes_token") @db.VarChar(255)
+  driveFullSyncAt       DateTime?       @map("drive_full_sync_at")
   scopes                Json
   status                String          @default("connected") @db.VarChar(32)
   lastError             String?         @map("last_error") @db.Text
@@ -220,6 +224,8 @@ model File {
   createdAt          DateTime         @default(now()) @map("created_at")
   updatedAt          DateTime         @updatedAt @map("updated_at")
   deletedAt          DateTime?        @map("deleted_at")
+  // Set when Google sync deleted it because it left Drive (not the user): it comes back if it reappears.
+  deletedBySync      Boolean          @default(false) @map("deleted_by_sync")
   user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   connectedAccount   ConnectedAccount @relation(fields: [connectedAccountId], references: [id], onDelete: Cascade)
   folder             Folder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
@@ -287,6 +293,8 @@ model Folder {
   createdAt          DateTime          @default(now()) @map("created_at")
   updatedAt          DateTime          @updatedAt @map("updated_at")
   deletedAt          DateTime?         @map("deleted_at")
+  // Set when Google sync deleted it because it left Drive (not the user): it comes back if it reappears.
+  deletedBySync      Boolean           @default(false) @map("deleted_by_sync")
   user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent             Folder?           @relation("FolderChildren", fields: [parentId], references: [id], onDelete: SetNull)
   children           Folder[]          @relation("FolderChildren")

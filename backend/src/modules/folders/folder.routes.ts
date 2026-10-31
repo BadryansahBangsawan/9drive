@@ -248,8 +248,8 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
     // Soft delete only: files go to Trash and stay in storage until the user deletes them permanently.
     // Drive folders are left in place because deleting a Drive folder also deletes everything inside it.
     const now = new Date()
-    await prisma.file.updateMany({ where: { userId: req.user!.id, status: 'active', folderId: { in: [...folderIds] } }, data: { status: 'deleted', deletedAt: now } })
-    await prisma.folder.updateMany({ where: { id: { in: [...folderIds] }, userId: req.user!.id }, data: { deletedAt: now } })
+    await prisma.file.updateMany({ where: { userId: req.user!.id, status: 'active', folderId: { in: [...folderIds] } }, data: { status: 'deleted', deletedAt: now, deletedBySync: false } })
+    await prisma.folder.updateMany({ where: { id: { in: [...folderIds] }, userId: req.user!.id }, data: { deletedAt: now, deletedBySync: false } })
 
     await createAuditLog(req.user!.id, 'DELETE_FOLDER', 'folder', root.id, { name: root.name })
     return res.json({ status: 'ok' })

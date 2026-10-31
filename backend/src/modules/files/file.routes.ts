@@ -147,7 +147,7 @@ fileRouter.delete('/batch', async (req: AuthRequest, res, next) => {
     const files = await prisma.file.findMany({ where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'active' } })
     const result = await prisma.file.updateMany({
       where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'active' },
-      data: { status: 'deleted', deletedAt: new Date() }
+      data: { status: 'deleted', deletedAt: new Date(), deletedBySync: false }
     })
     for (const f of files) {
       await createAuditLog(req.user!.id, 'TRASH_FILE', 'file', f.id, { name: f.name })
@@ -185,7 +185,7 @@ fileRouter.post('/batch/restore', async (req: AuthRequest, res, next) => {
     const files = await prisma.file.findMany({ where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'deleted' }, include: { folder: { select: { deletedAt: true } } } })
     const result = await prisma.file.updateMany({
       where: { id: { in: body.fileIds }, userId: req.user!.id, status: 'deleted' },
-      data: { status: 'active', deletedAt: null }
+      data: { status: 'active', deletedAt: null, deletedBySync: false }
     })
     // A file restored out of a deleted folder goes back to the root instead of an invisible folder.
     const orphanedIds = files.filter((file) => file.folder?.deletedAt).map((file) => file.id)
@@ -444,7 +444,7 @@ fileRouter.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
     const fileId = String(req.params.id)
     const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' } })
-    await prisma.file.update({ where: { id: file.id }, data: { status: 'deleted', deletedAt: new Date() } })
+    await prisma.file.update({ where: { id: file.id }, data: { status: 'deleted', deletedAt: new Date(), deletedBySync: false } })
     await createAuditLog(req.user!.id, 'TRASH_FILE', 'file', file.id, { name: file.name })
     return res.json({ status: 'ok' })
   } catch (error) {
