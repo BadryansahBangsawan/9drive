@@ -2,7 +2,6 @@ import { Router } from 'express'
 import { google } from 'googleapis'
 import { z } from 'zod'
 import { prisma } from '../../config/prisma.js'
-import { env } from '../../config/env.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { hashToken, randomToken } from '../../utils/crypto.js'
 import { shareExpiresAt } from '../../utils/share-expiry.js'
@@ -10,6 +9,7 @@ import type { ConnectedAccount, File, Folder } from '@prisma/client'
 import { ensureGoogleAppFolder, getAuthedGoogleClient, moveGoogleFile, syncGoogleAppFolderFiles, syncGoogleQuota } from '../google/google.service.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile } from './stream-file.js'
+import { newShareToken, readShareToken, shareUrl } from './share-token.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from './stream-google-file.js'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
@@ -259,7 +259,8 @@ fileRouter.get('/shared-links', async (req: AuthRequest, res, next) => {
     })
     return res.json({
       shares: shares.filter((share) => share.file.status === 'active').map((share) => {
-        const url = share.token ? `${env.FRONTEND_URL}/public/files/${share.token}` : null
+        const token = readShareToken(share)
+        const url = token ? shareUrl(token) : null
         return {
           id: share.id,
           url,
@@ -329,12 +330,13 @@ fileRouter.post('/:id/share', async (req: AuthRequest, res, next) => {
 
     const body = shareBodySchema.parse(req.body ?? {})
     let shareId = existingShare?.id
-    let token = existingShare?.token
+    let token = existingShare ? readShareToken(existingShare) : null
     let expiresAt = existingShare?.expiresAt ?? null
     if (!existingShare) {
-      token = randomToken(32)
+      const issued = newShareToken()
+      token = issued.token
       expiresAt = shareExpiresAt(body.expiresIn ?? 'never')
-      const share = await prisma.fileShare.create({ data: { fileId: file.id, userId: req.user!.id, token, tokenHash: hashToken(token), expiresAt } })
+      const share = await prisma.fileShare.create({ data: { fileId: file.id, userId: req.user!.id, ...issued.data, expiresAt } })
       shareId = share.id
       await createAuditLog(req.user!.id, 'CREATE_SHARE_LINK', 'file', file.id, { name: file.name, expiresAt: expiresAt?.toISOString() ?? null })
     } else if (body.expiresIn) {
@@ -343,7 +345,7 @@ fileRouter.post('/:id/share', async (req: AuthRequest, res, next) => {
       await createAuditLog(req.user!.id, 'UPDATE_SHARE_LINK', 'file', file.id, { name: file.name, expiresAt: expiresAt?.toISOString() ?? null })
     }
 
-    return res.status(existingShare ? 200 : 201).json({ url: `${env.FRONTEND_URL}/public/files/${token}`, shareId, expiresAt: expiresAt?.toISOString() ?? null })
+    return res.status(existingShare ? 200 : 201).json({ url: shareUrl(token!), shareId, expiresAt: expiresAt?.toISOString() ?? null })
   } catch (error) {
     return next(error)
   }

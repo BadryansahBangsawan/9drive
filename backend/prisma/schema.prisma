@@ -239,7 +239,8 @@ model FileShare {
   id        String    @id @default(uuid()) @db.Char(36)
   fileId    String    @map("file_id") @db.Char(36)
   userId    String    @map("user_id") @db.Char(36)
-  token     String?   @unique @db.VarChar(191)
+  token     String?   @unique @db.VarChar(191) // legacy plaintext; encrypted into tokenEncrypted and cleared at startup
+  tokenEncrypted String? @map("token_encrypted") @db.Text
   tokenHash String    @unique @map("token_hash") @db.VarChar(255)
   enabled   Boolean   @default(true)
   expiresAt DateTime? @map("expires_at")
