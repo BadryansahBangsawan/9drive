@@ -121,6 +121,15 @@ export function AllFilesPage() {
   const [syncingDrive, setSyncingDrive] = useState(false)
   const [fileViewMode, setFileViewMode] = useState<FileViewMode>(getStoredFileViewMode)
   const { uploadFiles } = useUpload()
+
+  // Shell "Upload" button navigates here with ?upload=1; open the modal and drop the param.
+  useEffect(() => {
+    if (searchParams.get('upload') !== '1') return
+    setUploadOpen(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('upload')
+    setSearchParams(next, { replace: true })
+  }, [searchParams])
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('viewer')

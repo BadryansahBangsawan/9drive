@@ -3,7 +3,7 @@ import { API_URL, apiFetch } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 
 export type UploadProgressStatus = 'uploading' | 'done' | 'error' | 'partial'
-export type UploadProgressFile = { name: string; size: number; percent: number; status: UploadProgressStatus }
+export type UploadProgressFile = { name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string }
 export type UploadProgressState = { open: boolean; fileName: string; percent: number; status: UploadProgressStatus; files: UploadProgressFile[] }
 
 type ResumableSession = { sessionId: string; file: File; folderId?: string | null; targetAccountId?: string | null }
@@ -27,7 +27,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   })
   const [resumableSessions, setResumableSessions] = useState<Record<string, ResumableSession>>({})
 
-  async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, sessionIdToRetry?: string, targetAccountId?: string | null) {
+  async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, sessionIdToRetry?: string, targetAccountId?: string | null, onAccountLabel?: (label: string) => void) {
     const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks (must be multiple of 256KB for Google Drive)
     let sessionId = sessionIdToRetry || ''
     let startOffset = 0
@@ -40,7 +40,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
     // 1. Initialize or get status
     if (!sessionId) {
-      const initData = await apiFetch<{ sessionId: string; provider: string }>('/uploads/resumable/init', {
+      const initData = await apiFetch<{ sessionId?: string; provider: string; accountLabel?: string }>('/uploads/resumable/init', {
         method: 'POST',
         body: JSON.stringify({
           fileName: file.name,
@@ -50,7 +50,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           targetAccountId: targetAccountId || undefined
         })
       })
-      sessionId = initData.sessionId
+      sessionId = initData.sessionId as string
+      if (initData.accountLabel) onAccountLabel?.(initData.accountLabel)
       // Update session with the active sessionId
       setResumableSessions(prev => ({
         ...prev,
@@ -126,7 +127,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
               files: nextFiles
             }
           })
-        }, undefined, targetAccountId)
+        }, undefined, targetAccountId, (label) => {
+          setUploadProgress((current) => {
+            const nextFiles = [...current.files]
+            if (nextFiles[i]) nextFiles[i] = { ...nextFiles[i], accountLabel: label }
+            return { ...current, files: nextFiles }
+          })
+        })
       } catch (err) {
         console.error('File upload failed:', file.name, err)
         setUploadProgress((current) => {
