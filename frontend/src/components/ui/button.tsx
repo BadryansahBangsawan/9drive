@@ -3,25 +3,31 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        default: 'bg-blue-600 text-white shadow-[0_8px_18px_rgba(37,99,235,0.25)] hover:bg-blue-700',
-        outline: 'border border-slate-200 bg-white text-slate-950 shadow-sm hover:bg-slate-50',
-        ghost: 'text-slate-700 hover:bg-slate-100',
-        soft: 'bg-slate-100 text-slate-950 shadow-sm hover:bg-slate-200',
-        danger: 'text-orange-600 hover:bg-orange-50',
+        primary: 'bg-primary text-primary-fg hover:opacity-90',
+        secondary: 'border border-border bg-bg text-text hover:bg-hover',
+        ghost: 'text-muted hover:bg-hover hover:text-text',
+        danger: 'bg-danger text-primary-fg hover:opacity-90',
+        dangerOutline: 'border border-danger bg-bg text-danger hover:bg-hover',
+        // Aliases kept so pages not yet rebuilt keep compiling.
+        default: 'bg-primary text-primary-fg hover:opacity-90',
+        outline: 'border border-border bg-bg text-text hover:bg-hover',
+        soft: 'border border-border bg-bg text-text hover:bg-hover',
       },
       size: {
-        default: 'h-11 px-4 py-2',
-        sm: 'h-9 px-3',
-        icon: 'h-11 w-11',
+        sm: 'h-7 px-2.5',
+        md: 'h-8 px-3',
+        lg: 'h-9 px-4',
+        icon: 'h-8 w-8 p-0',
+        default: 'h-8 px-3',
       },
     },
     defaultVariants: {
-      variant: 'default',
-      size: 'default',
+      variant: 'primary',
+      size: 'md',
     },
   },
 )
@@ -30,6 +36,6 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}
 
-export function Button({ className, variant, size, ...props }: ButtonProps) {
-  return <button className={cn(buttonVariants({ variant, size, className }))} {...props} />
+export function Button({ className, variant, size, type = 'button', ...props }: ButtonProps) {
+  return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />
 }
