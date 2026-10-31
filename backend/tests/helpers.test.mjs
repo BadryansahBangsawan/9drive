@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { shareExpiresAt } from '../dist/utils/share-expiry.js'
 import { accountLabel } from '../dist/utils/account-label.js'
+import { nextOffsetFromRange } from '../dist/utils/resumable-range.js'
 
 const now = new Date('2026-10-31T00:00:00Z')
 
@@ -19,4 +20,12 @@ test('accountLabel formats drive and s3', () => {
   assert.equal(accountLabel({ provider: 'google_drive', email: 'work@example.com' }), 'Drive · work@example.com')
   assert.equal(accountLabel({ provider: 's3', email: 'my-bucket (S3)', displayName: 'r2-backup' }), 'S3 · r2-backup')
   assert.equal(accountLabel({ provider: 's3', email: 'my-bucket (S3)' }), 'S3 · my-bucket (S3)')
+})
+
+test('nextOffsetFromRange uses the last persisted byte', () => {
+  assert.equal(nextOffsetFromRange('bytes=0-4194303'), 4194304n)
+  assert.equal(nextOffsetFromRange('bytes=0-0'), 1n)
+  assert.equal(nextOffsetFromRange(null), 0n)
+  assert.equal(nextOffsetFromRange(undefined), 0n)
+  assert.equal(nextOffsetFromRange('garbage'), 0n)
 })

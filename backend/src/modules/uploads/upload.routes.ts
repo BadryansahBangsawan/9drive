@@ -11,6 +11,7 @@ import { ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '.
 import { buildS3ObjectKey, deleteS3Key, getS3ConfigForAccount, syncS3Quota, uploadS3Object } from '../s3/s3.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { accountLabel } from '../../utils/account-label.js'
+import { nextOffsetFromRange } from '../../utils/resumable-range.js'
 
 export const uploadRouter = Router()
 
@@ -449,13 +450,7 @@ uploadRouter.get('/resumable/status/:id', requireAuth, async (req: AuthRequest, 
     })
 
     if (queryRes.status === 308) {
-      const range = queryRes.headers.get('range')
-      if (range) {
-        // e.g. bytes=0-1048575
-        const parts = range.split('-')
-        const lastByte = BigInt(parts[1])
-        return res.json({ status: 'uploading', offset: (lastByte + 1n).toString() })
-      }
+      return res.json({ status: 'uploading', offset: nextOffsetFromRange(queryRes.headers.get('range')).toString() })
     } else if (queryRes.ok) {
       return res.json({ status: 'completed', offset: session.sizeBytes.toString() })
     }
@@ -510,7 +505,8 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
     } as any)
 
     if (putRes.status === 308) {
-      return res.json({ status: 'uploading', offset: (endByte + 1n).toString() })
+      // Google may persist only part of the chunk; resume from what it actually stored.
+      return res.json({ status: 'uploading', offset: nextOffsetFromRange(putRes.headers.get('range')).toString() })
     }
 
     if (putRes.ok) {
