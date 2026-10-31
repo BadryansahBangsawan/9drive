@@ -4,7 +4,7 @@ import { Router } from 'express'
 import { Transform, type Readable } from 'node:stream'
 import { z } from 'zod'
 import { google } from '../google/google-apis.js'
-import type { ConnectedAccount, Folder } from '@prisma/client'
+import type { ConnectedAccount, Folder, UploadSession } from '@prisma/client'
 import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
@@ -335,6 +335,34 @@ export async function handleUpload(req: AuthRequest, res: Response, next: NextFu
 
 uploadRouter.post('/', requireAuth, handleUpload)
 
+type DriveFileResource = { id: string; name?: string; mimeType?: string }
+
+// Records a finished resumable Drive upload: the File row (once), the session, audit and quota.
+// Called from the last chunk and from /resumable/status, whichever learns of completion first.
+async function finalizeResumableUpload(session: UploadSession, account: ConnectedAccount, fileMeta: DriveFileResource) {
+  let file = await prisma.file.findFirst({ where: { providerFileId: fileMeta.id, userId: session.userId } })
+  if (!file) {
+    file = await prisma.file.create({
+      data: {
+        userId: session.userId,
+        connectedAccountId: account.id,
+        folderId: session.folderId,
+        provider: 'google_drive',
+        providerFileId: fileMeta.id,
+        name: fileMeta.name || session.fileName,
+        mimeType: fileMeta.mimeType || session.mimeType,
+        sizeBytes: session.sizeBytes,
+      },
+    })
+  }
+  if (session.status !== 'completed') {
+    await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'completed', completedAt: new Date() } })
+    await auditUpload(session.userId, file, file.sizeBytes, account)
+    syncQuotaInBackground(account.id, session.id)
+  }
+  return file
+}
+
 // Resumable upload endpoints
 
 // 1. Initialize resumable session
@@ -442,6 +470,9 @@ uploadRouter.get('/resumable/status/:id', requireAuth, async (req: AuthRequest, 
     if (queryRes.status === 308) {
       return res.json({ status: 'uploading', offset: nextOffsetFromRange(queryRes.headers.get('range')).toString() })
     } else if (queryRes.ok) {
+      // Google finished the upload but the client never got the last chunk's answer (dropped
+      // connection, proxy error). Record the file now, or it would be "done" yet missing.
+      await finalizeResumableUpload(session, account, await queryRes.json() as DriveFileResource)
       return res.json({ status: 'completed', offset: session.sizeBytes.toString() })
     }
 
@@ -504,38 +535,8 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
     }
 
     if (putRes.ok) {
-      // Completed! Parse metadata
-      const fileMeta = await putRes.json() as { id: string; name: string; mimeType: string }
-
-      let existingFile = await prisma.file.findFirst({
-        where: { providerFileId: fileMeta.id, userId: req.user!.id }
-      })
-
-      if (!existingFile) {
-        existingFile = await prisma.file.create({
-          data: {
-            userId: req.user!.id,
-            connectedAccountId: account.id,
-            folderId: session.folderId,
-            provider: 'google_drive',
-            providerFileId: fileMeta.id,
-            name: fileMeta.name || session.fileName,
-            mimeType: fileMeta.mimeType || session.mimeType,
-            sizeBytes: session.sizeBytes
-          }
-        })
-      }
-
-      await prisma.uploadSession.update({
-        where: { id: session.id },
-        data: { status: 'completed', completedAt: new Date() }
-      })
-
-      await auditUpload(req.user!.id, existingFile, existingFile.sizeBytes, account)
-
-      syncQuotaInBackground(account.id, session.id)
-
-      return res.status(201).json({ status: 'completed', file: { ...existingFile, sizeBytes: existingFile.sizeBytes.toString() } })
+      const file = await finalizeResumableUpload(session, account, await putRes.json() as DriveFileResource)
+      return res.status(201).json({ status: 'completed', file: { ...file, sizeBytes: file.sizeBytes.toString() } })
     }
 
     const errorMsg = await putRes.text()
