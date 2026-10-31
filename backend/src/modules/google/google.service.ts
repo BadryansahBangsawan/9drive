@@ -5,6 +5,7 @@ import { decryptText, encryptText } from '../../utils/crypto.js'
 
 const googleDriveFolderMimeType = 'application/vnd.google-apps.folder'
 const appFolderName = '9drive'
+const DRIVE_PARENTS_PER_QUERY = 40
 
 export function createOAuthClient(config: ProviderConfig) {
   return new google.auth.OAuth2(decryptText(config.clientIdEncrypted), decryptText(config.clientSecretEncrypted), config.redirectUri)
@@ -140,26 +141,31 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   ]
 
   const driveFiles: DriveFileMetadata[] = []
-  let pageToken: string | undefined
+  const seenDriveFileIds = new Set<string>()
 
-  const parentsQuery = parentIds.map((id) => `'${id}' in parents`).join(' or ')
-  const q = `(${parentsQuery}) and mimeType != '${googleDriveFolderMimeType}' and trashed = false`
-
-  do {
-    const response = await drive.files.list({
-      q,
-      spaces: 'drive',
-      fields: 'nextPageToken,files(id,name,mimeType,size,parents)',
-      pageSize: 1000,
-      pageToken,
-    })
-    for (const file of response.data.files ?? []) {
-      if (!file.id || !file.name || !file.mimeType) continue
-      const parentId = file.parents?.[0] ?? appFolderId
-      driveFiles.push({ id: file.id, name: file.name, mimeType: file.mimeType, sizeBytes: BigInt(file.size ?? 0), parentId })
-    }
-    pageToken = response.data.nextPageToken ?? undefined
-  } while (pageToken)
+  // One OR-clause per folder overflows Drive's query length once an account has hundreds of
+  // folders, so query the parents in batches.
+  for (let i = 0; i < parentIds.length; i += DRIVE_PARENTS_PER_QUERY) {
+    const parentsQuery = parentIds.slice(i, i + DRIVE_PARENTS_PER_QUERY).map((id) => `'${escapeDriveQueryValue(id)}' in parents`).join(' or ')
+    const q = `(${parentsQuery}) and mimeType != '${googleDriveFolderMimeType}' and trashed = false`
+    let pageToken: string | undefined
+    do {
+      const response = await drive.files.list({
+        q,
+        spaces: 'drive',
+        fields: 'nextPageToken,files(id,name,mimeType,size,parents)',
+        pageSize: 1000,
+        pageToken,
+      })
+      for (const file of response.data.files ?? []) {
+        if (!file.id || !file.name || !file.mimeType || seenDriveFileIds.has(file.id)) continue
+        seenDriveFileIds.add(file.id)
+        const parentId = file.parents?.[0] ?? appFolderId
+        driveFiles.push({ id: file.id, name: file.name, mimeType: file.mimeType, sizeBytes: BigInt(file.size ?? 0), parentId })
+      }
+      pageToken = response.data.nextPageToken ?? undefined
+    } while (pageToken)
+  }
 
   const existingFiles = await prisma.file.findMany({ where: { userId, connectedAccountId: account.id, provider: 'google_drive' } })
   const existingByProviderId = new Map(existingFiles.map((file) => [file.providerFileId, file]))
