@@ -343,7 +343,7 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     const body = z.object({
       fileName: z.string().min(1),
       mimeType: z.string().min(1),
-      sizeBytes: z.string(),
+      sizeBytes: z.string().trim().regex(/^\d+$/, 'sizeBytes must be a whole number of bytes.'),
       folderId: z.string().nullable().optional(),
       targetAccountId: z.string().nullable().optional()
     }).parse(req.body)

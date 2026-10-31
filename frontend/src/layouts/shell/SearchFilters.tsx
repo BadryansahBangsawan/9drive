@@ -73,12 +73,14 @@ export function SearchFilters({ accounts }: { accounts: ConnectedAccount[] }) {
     if (kind) next.set('kind', kind)
     if (accountId) next.set('accountId', accountId)
     if (minSize) {
-      const bytes = Number(minSize) * 1024 * 1024
-      if (!isNaN(bytes)) next.set('minSize', String(bytes))
+      // The API takes whole, non-negative byte counts.
+      const bytes = Math.round(Number(minSize) * 1024 * 1024)
+      if (Number.isFinite(bytes) && bytes >= 0) next.set('minSize', String(bytes))
     }
     if (maxSize) {
-      const bytes = Number(maxSize) * 1024 * 1024
-      if (!isNaN(bytes)) next.set('maxSize', String(bytes))
+      // The API takes whole, non-negative byte counts.
+      const bytes = Math.round(Number(maxSize) * 1024 * 1024)
+      if (Number.isFinite(bytes) && bytes >= 0) next.set('maxSize', String(bytes))
     }
     if (startDate) next.set('startDate', new Date(startDate).toISOString())
     if (endDate) next.set('endDate', new Date(endDate).toISOString())
