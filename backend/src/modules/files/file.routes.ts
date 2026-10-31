@@ -326,16 +326,22 @@ fileRouter.post('/:id/share', async (req: AuthRequest, res, next) => {
   try {
     const fileId = String(req.params.id)
     const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id, status: 'active' } })
-    const existingShare = await prisma.fileShare.findFirst({ where: { fileId: file.id, userId: req.user!.id, enabled: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'desc' } })
+    const activeShare = await prisma.fileShare.findFirst({ where: { fileId: file.id, userId: req.user!.id, enabled: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }, orderBy: { createdAt: 'desc' } })
 
     const body = shareBodySchema.parse(req.body ?? {})
+    // Very old rows stored only the token hash, so their URL can't be rebuilt: replace them
+    // with a fresh link (keeping the expiry) instead of returning /public/files/undefined.
+    const recoveredToken = activeShare ? readShareToken(activeShare) : null
+    if (activeShare && !recoveredToken) await prisma.fileShare.update({ where: { id: activeShare.id }, data: { enabled: false } })
+    const existingShare = recoveredToken ? activeShare : null
+
     let shareId = existingShare?.id
-    let token = existingShare ? readShareToken(existingShare) : null
+    let token = recoveredToken
     let expiresAt = existingShare?.expiresAt ?? null
     if (!existingShare) {
       const issued = newShareToken()
       token = issued.token
-      expiresAt = shareExpiresAt(body.expiresIn ?? 'never')
+      expiresAt = body.expiresIn ? shareExpiresAt(body.expiresIn) : (activeShare?.expiresAt ?? null)
       const share = await prisma.fileShare.create({ data: { fileId: file.id, userId: req.user!.id, ...issued.data, expiresAt } })
       shareId = share.id
       await createAuditLog(req.user!.id, 'CREATE_SHARE_LINK', 'file', file.id, { name: file.name, expiresAt: expiresAt?.toISOString() ?? null })
