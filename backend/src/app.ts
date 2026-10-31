@@ -15,6 +15,7 @@ import { apiKeyRouter } from './modules/api-keys/api-key.routes.js'
 import { publicApiRouter } from './modules/public-api/public-api.routes.js'
 import { auditLogRouter } from './modules/audit-logs/audit-log.routes.js'
 import { systemRouter } from './modules/system/system.routes.js'
+import { appVersion } from './utils/app-version.js'
 
 export const app = express()
 // Trust X-Forwarded-For only from proxies on loopback/private networks (e.g. the bundled nginx).
@@ -23,7 +24,7 @@ app.set('trust proxy', 'loopback, linklocal, uniquelocal')
 app.use(cors({ origin: env.FRONTEND_URL }))
 app.use(express.json({ limit: '1mb' }))
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }))
+app.get('/health', (_req, res) => res.json({ status: 'ok', version: appVersion }))
 app.use('/api', publicApiRouter)
 app.use('/public', publicRouter)
 app.use('/auth', authRouter)

@@ -66,6 +66,7 @@ export function SettingsPage() {
   const [updateFinished, setUpdateFinished] = useState(false)
   const [updateSuccess, setUpdateSuccess] = useState<boolean | null>(null)
   const [reconnectCount, setReconnectCount] = useState(0)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
   const logContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -87,6 +88,12 @@ export function SettingsPage() {
           setUpdateSuccess(true)
           setIsPollingLog(false)
           setUpdateModalTitle('System Updated')
+          loadAppVersion()
+        } else if (data.log.includes('=== System Update Failed:')) {
+          setUpdateFinished(true)
+          setUpdateSuccess(false)
+          setIsPollingLog(false)
+          setUpdateModalTitle('System Update Failed')
         }
       } catch (err) {
         if (!active) return
@@ -108,6 +115,16 @@ export function SettingsPage() {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
     }
   }, [updateLog])
+
+  function loadAppVersion() {
+    apiFetch<{ version?: string }>('/health', { skipAuth: true })
+      .then((data) => setAppVersion(data.version ?? null))
+      .catch(() => undefined)
+  }
+
+  useEffect(() => {
+    if (isAdmin) loadAppVersion()
+  }, [isAdmin])
 
   async function runSystemUpdate() {
     setUpdatingSystem(true)
@@ -265,7 +282,7 @@ export function SettingsPage() {
               </form>
             </Section>
 
-            <Section title="System update" badge={<Badge>Admin</Badge>} description="Pull the latest code from GitHub. Dev servers restart automatically.">
+            <Section title="System update" badge={<Badge>Admin</Badge>} description={`Pull the latest code from GitHub, rebuild, and restart.${appVersion ? ` Current version ${appVersion}.` : ''}`}>
               <Button variant="secondary" onClick={runSystemUpdate} disabled={updatingSystem}>
                 <RefreshCw className={updatingSystem ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} strokeWidth={1.5} />
                 {updatingSystem ? 'Updating...' : 'Update now'}

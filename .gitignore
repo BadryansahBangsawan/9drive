@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.log
+.update-pending
 .DS_Store
 
 # Secrets
