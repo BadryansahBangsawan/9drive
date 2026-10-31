@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Clock, FileArchive, Folder, Trash2, Users, UserCheck } from 'lucide-react'
-import { MetricCard } from '@/components/drive/MetricCard'
+import { Check, Link2, MoreHorizontal, Users, X } from 'lucide-react'
+import { FileIcon } from '@/components/drive/FileIcon'
 import { PageHeader } from '@/components/drive/PageHeader'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { apiFetch, formatBytes, formatDate } from '@/lib/api'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Menu, MenuItem } from '@/components/ui/menu'
+import { useDriveLayoutActions } from '@/layouts/DriveLayout'
+import { apiFetch } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-type InviteTarget = { id: string; name: string; type: 'file' | 'folder'; mimeType?: string; sizeBytes?: string }
+type InviteTarget = { id: string; name: string; type: 'file' | 'folder' }
 type Invite = {
   id: string
   email: string
@@ -16,86 +19,173 @@ type Invite = {
   targetType: 'file' | 'folder'
   targetId: string
   target: InviteTarget | null
+}
+type Share = {
+  id: string
+  url: string | null
   createdAt: string
-  acceptedAt: string | null
-  user: { id: string; name: string; email: string } | null
+  expiresAt: string | null
+  file: { id: string; name: string; mimeType: string }
 }
 
-function ResourceIcon({ type }: { type: 'file' | 'folder' }) {
-  return type === 'folder' ? <Folder className="h-5 w-5 text-blue-600" /> : <FileArchive className="h-5 w-5 text-blue-600" />
+function kindOf(mimeType: string) {
+  if (mimeType.startsWith('image/')) return 'image' as const
+  if (mimeType.startsWith('video/')) return 'video' as const
+  if (mimeType.includes('pdf')) return 'pdf' as const
+  return 'doc' as const
+}
+
+function expiryText(expiresAt: string | null) {
+  if (!expiresAt) return 'Never expires'
+  return `Expires ${new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(expiresAt))}`
+}
+
+function initials(email: string) {
+  return (email.split('@')[0].replace(/[^a-zA-Z0-9]/g, '').slice(0, 2) || '?').toUpperCase()
 }
 
 export function SharedPage() {
-  const [sentInvites, setSentInvites] = useState<Invite[]>([])
-  const [receivedInvites, setReceivedInvites] = useState<Invite[]>([])
+  const { setBreadcrumb, setHeaderActions } = useDriveLayoutActions()
+  const [shares, setShares] = useState<Share[]>([])
+  const [invites, setInvites] = useState<Invite[]>([])
+  const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
-  const pendingCount = sentInvites.filter((invite) => invite.status === 'pending').length
-  const acceptedCount = sentInvites.filter((invite) => invite.status === 'accepted').length
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
 
-  async function loadInvites() {
-    const data = await apiFetch<{ sent: Invite[]; received: Invite[] }>('/invites')
-    setSentInvites(data.sent)
-    setReceivedInvites(data.received)
+  async function load() {
+    try {
+      const [links, inv] = await Promise.all([
+        apiFetch<{ shares: Share[] }>('/files/shared-links'),
+        apiFetch<{ sent: Invite[] }>('/invites'),
+      ])
+      setShares(links.shares)
+      setInvites(inv.sent)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to load shared items')
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
-    loadInvites().catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to load shared resources'))
-    window.addEventListener('9drive:invites-changed', loadInvites)
-    return () => window.removeEventListener('9drive:invites-changed', loadInvites)
+    setBreadcrumb([{ label: 'Shared' }])
+    setHeaderActions(null)
+    load()
+    window.addEventListener('9drive:invites-changed', load)
+    return () => window.removeEventListener('9drive:invites-changed', load)
   }, [])
 
-  async function revokeInvite(id: string) {
-    await apiFetch(`/invites/${id}`, { method: 'DELETE' })
-    await loadInvites()
+  async function copyLink(share: Share) {
+    if (!share.url) return
+    try {
+      await navigator.clipboard.writeText(share.url)
+      setCopiedId(share.id)
+      window.setTimeout(() => setCopiedId((current) => (current === share.id ? null : current)), 1500)
+    } catch {
+      setMessage('Could not copy the link.')
+    }
   }
+
+  async function revokeLink(share: Share) {
+    try {
+      await apiFetch(`/files/${share.file.id}/share`, { method: 'DELETE' })
+      setShares((prev) => prev.filter((s) => s.id !== share.id))
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to revoke link')
+    }
+  }
+
+  async function revokeInvite(id: string) {
+    setMenu(null)
+    try {
+      await apiFetch(`/invites/${id}`, { method: 'DELETE' })
+      setInvites((prev) => prev.filter((i) => i.id !== id))
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to revoke invite')
+    }
+  }
+
+  const menuInvite = invites.find((i) => i.id === menu?.id)
 
   return (
     <>
-      <PageHeader title="Shared" description="Files and folders shared with members or shared with you." />
-      {message ? <p className="mt-5 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
-      <div className="mt-8 grid gap-4 md:grid-cols-3">
-        <MetricCard label="Shared Resources" value={String(sentInvites.length + receivedInvites.length)} icon={Users} />
-        <MetricCard label="Accepted Members" value={String(acceptedCount)} icon={UserCheck} />
-        <MetricCard label="Pending Invites" value={String(pendingCount)} icon={Clock} />
-      </div>
+      <PageHeader title="Shared" description="Public links and invites you have created." />
+      {message ? (
+        <p role="alert" className="mt-4 rounded-[10px] border border-danger px-3 py-2 text-[13px] text-danger">{message}</p>
+      ) : null}
+      {loading ? (
+        <p className="mt-10 text-center text-[13px] text-muted">Loading shared items…</p>
+      ) : (
+        <div className="mt-6 space-y-8">
+          <section aria-labelledby="public-links">
+            <h2 id="public-links" className="mb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Public links</h2>
+            {shares.length === 0 ? (
+              <EmptyState icon={<Link2 className="h-4 w-4" strokeWidth={1.5} />} title="No public links" description="Turn on a public link from a file's Share dialog and it will show up here." />
+            ) : (
+              <ul className="divide-y divide-border border-y border-border">
+                {shares.map((share) => (
+                  <li key={share.id} className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1.5 hover:bg-hover">
+                    <FileIcon kind={kindOf(share.file.mimeType)} />
+                    <span className="min-w-0 flex-1 basis-40 truncate text-[13px] font-medium text-text" title={share.file.name}>{share.file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyLink(share)}
+                      disabled={!share.url}
+                      title={share.url ?? undefined}
+                      aria-label={`Copy link for ${share.file.name}`}
+                      className="inline-flex h-7 min-w-0 max-w-[16rem] items-center gap-1.5 rounded-md border border-border bg-surface px-2 font-mono text-[12px] text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50"
+                    >
+                      {copiedId === share.id ? <Check className="h-3.5 w-3.5 shrink-0 text-drive" strokeWidth={1.5} aria-hidden="true" /> : <Link2 className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} aria-hidden="true" />}
+                      <span className="truncate">{copiedId === share.id ? 'Copied' : (share.url ?? '').replace(/^https?:\/\//, '')}</span>
+                    </button>
+                    <span className="w-28 text-[13px] tabular-nums text-muted">{expiryText(share.expiresAt)}</span>
+                    <Button variant="ghost" size="sm" onClick={() => revokeLink(share)}>Revoke</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-      <Card className="mt-8 p-5">
-        <h2 className="font-extrabold">Shared With You</h2>
-        <div className="mt-4 grid gap-3">
-          {receivedInvites.length === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No files or folders have been shared with you yet.</p> : receivedInvites.map((invite) => (
-            <div key={invite.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <ResourceIcon type={invite.targetType} />
-                <div className="min-w-0"><p className="truncate font-semibold text-slate-950">{invite.target?.name ?? 'Unavailable resource'}</p><p className="text-sm text-slate-500 capitalize">{invite.targetType} • {invite.role}{invite.target?.sizeBytes ? ` • ${formatBytes(invite.target.sizeBytes)}` : ''}</p></div>
-              </div>
-              <span className={cn('w-fit rounded-full px-3 py-1 text-xs font-bold capitalize', invite.status === 'accepted' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>{invite.status}</span>
-            </div>
-          ))}
+          <section aria-labelledby="invites">
+            <h2 id="invites" className="mb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-subtle">Invites</h2>
+            {invites.length === 0 ? (
+              <EmptyState icon={<Users className="h-4 w-4" strokeWidth={1.5} />} title="No invites" description="Invite people to a file or folder from its Share dialog." />
+            ) : (
+              <ul className="divide-y divide-border border-y border-border">
+                {invites.map((invite) => (
+                  <li key={invite.id} className="flex min-h-12 items-center gap-3 px-2 py-1.5 hover:bg-hover">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold text-text" aria-hidden="true">{initials(invite.email)}</span>
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-text" title={invite.email}>{invite.email}</span>
+                    <span className="hidden min-w-0 max-w-[14rem] flex-1 truncate text-[13px] text-muted sm:block" title={invite.target?.name}>
+                      {invite.targetType === 'folder' ? 'Folder' : 'File'} · {invite.target?.name ?? 'Unavailable'}
+                    </span>
+                    <Badge>{invite.role}</Badge>
+                    <span className="flex w-20 items-center gap-1.5 text-[13px] capitalize text-muted">
+                      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', invite.status === 'accepted' ? 'bg-drive' : 'bg-subtle')} aria-hidden="true" />
+                      {invite.status}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Actions for ${invite.email}`}
+                      onClick={(e) => {
+                        const r = e.currentTarget.getBoundingClientRect()
+                        setMenu({ id: invite.id, x: r.right - 200, y: r.bottom + 4 })
+                      }}
+                    >
+                      <MoreHorizontal className="h-4 w-4" strokeWidth={1.5} />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
-      </Card>
-
-      <Card className="mt-6 p-5">
-        <h2 className="font-extrabold">Resources You Shared</h2>
-        <div className="mt-4 grid gap-3">
-          {sentInvites.length === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No files or folders shared yet. Use Invite Members from the top bar.</p> : sentInvites.map((invite) => (
-            <div key={invite.id} className="flex flex-col gap-3 rounded-xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <ResourceIcon type={invite.targetType} />
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-slate-950">{invite.target?.name ?? 'Unavailable resource'}</p>
-                  <p className="break-all text-sm text-slate-500">Shared with {invite.email}</p>
-                  <p className="mt-1 text-xs text-slate-500">Invited {formatDate(invite.createdAt)}</p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-white px-3 py-1 text-xs font-bold capitalize text-slate-600">{invite.role}</span>
-                <span className={cn('rounded-full px-3 py-1 text-xs font-bold capitalize', invite.status === 'accepted' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>{invite.status}</span>
-                <Button variant="danger" size="sm" onClick={() => revokeInvite(invite.id)}><Trash2 className="h-4 w-4" />Revoke</Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
+      )}
+      <Menu open={!!menu && !!menuInvite} x={menu?.x ?? 0} y={menu?.y ?? 0} onClose={() => setMenu(null)}>
+        <MenuItem danger icon={<X className="h-4 w-4" strokeWidth={1.5} />} onSelect={() => menu && revokeInvite(menu.id)}>Revoke invite</MenuItem>
+      </Menu>
     </>
   )
 }
