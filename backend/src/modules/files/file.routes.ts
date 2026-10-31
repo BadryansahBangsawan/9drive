@@ -80,7 +80,7 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
     const files = await prisma.file.findMany({
       where,
       include: {
-        connectedAccount: { select: { id: true, email: true, provider: true } },
+        connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } },
         folder: { select: { id: true, name: true } }
       },
       orderBy: { createdAt: 'desc' }
@@ -133,7 +133,7 @@ fileRouter.get('/trash', async (req: AuthRequest, res, next) => {
         ...(query.q ? { name: { contains: query.q } } : {})
       },
       include: {
-        connectedAccount: { select: { id: true, email: true, provider: true } },
+        connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } },
         folder: { select: { id: true, name: true } }
       },
       orderBy: { deletedAt: 'desc' }
@@ -220,7 +220,7 @@ fileRouter.get('/shared-links', async (req: AuthRequest, res, next) => {
   try {
     const shares = await prisma.fileShare.findMany({
       where: { userId: req.user!.id, enabled: true, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-      include: { file: { include: { connectedAccount: { select: { email: true, provider: true } }, folder: { select: { id: true, name: true } } } } },
+      include: { file: { include: { connectedAccount: { select: { email: true, provider: true, displayName: true } }, folder: { select: { id: true, name: true } } } } },
       orderBy: { createdAt: 'desc' },
     })
     return res.json({
@@ -263,7 +263,7 @@ fileRouter.post('/sync-google', async (req: AuthRequest, res, next) => {
 fileRouter.get('/:id', async (req: AuthRequest, res, next) => {
   try {
     const fileId = String(req.params.id)
-    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id }, include: { connectedAccount: { select: { id: true, email: true, provider: true } }, folder: { select: { id: true, name: true } } } })
+    const file = await prisma.file.findFirstOrThrow({ where: { id: fileId, userId: req.user!.id }, include: { connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } }, folder: { select: { id: true, name: true } } } })
     return res.json({ file: { ...file, sizeBytes: file.sizeBytes.toString() } })
   } catch (error) {
     return next(error)
@@ -278,7 +278,7 @@ fileRouter.patch('/:id', async (req: AuthRequest, res, next) => {
     const drive = file.provider === 's3' ? null : google.drive({ version: 'v3', auth: await getAuthedGoogleClient(file.connectedAccount) })
     if (body.folderId) await prisma.folder.findFirstOrThrow({ where: { id: body.folderId, userId: req.user!.id, deletedAt: null } })
     if (body.name && drive) await drive.files.update({ fileId: file.providerFileId, requestBody: { name: body.name } })
-    const updated = await prisma.file.update({ where: { id: file.id }, data: { ...(body.name ? { name: body.name } : {}), ...(body.folderId !== undefined ? { folderId: body.folderId } : {}) }, include: { connectedAccount: { select: { id: true, email: true, provider: true } }, folder: { select: { id: true, name: true } } } })
+    const updated = await prisma.file.update({ where: { id: file.id }, data: { ...(body.name ? { name: body.name } : {}), ...(body.folderId !== undefined ? { folderId: body.folderId } : {}) }, include: { connectedAccount: { select: { id: true, email: true, provider: true, displayName: true } }, folder: { select: { id: true, name: true } } } })
     await createAuditLog(req.user!.id, 'UPDATE_FILE', 'file', updated.id, { name: updated.name, updates: body })
     return res.json({ file: { ...updated, sizeBytes: updated.sizeBytes.toString() } })
   } catch (error) {

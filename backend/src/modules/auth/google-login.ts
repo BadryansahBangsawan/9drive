@@ -68,7 +68,7 @@ export async function completeGoogleLogin(oauthState: OauthState & { providerCon
     update: accountData,
   })
 
-  await createAuditLog(user.id, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
+  if (!existingAccount || existingAccount.status !== 'connected') await createAuditLog(user.id, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
   await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
   await syncGoogleQuota(account.id).catch(() => undefined)
 
