@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { AuthLogo, AuthShell } from '@/components/auth/AuthShell'
 import { Button } from '@/components/ui/button'
 import { DesktopAuthFooter } from '@/components/desktop/DesktopAuthFooter'
 import { getServerUrl } from '@/lib/runtime'
 import { openExternal } from '@/lib/desktop'
-import { beginDesktopSignIn } from '@/lib/desktop-auth'
+import { beginDesktopSignIn, SIGN_IN_REJECTED_EVENT } from '@/lib/desktop-auth'
 
 // Desktop app sign-in: everything happens on the 9Drive website in the browser (email, Google, sign
 // up, captcha), which hands the app a session through a ninedrive://auth link (DesktopBridge).
@@ -13,11 +14,24 @@ export function DesktopLoginPage({ register = false }: { register?: boolean }) {
   const [error, setError] = useState('')
   const server = getServerUrl()
 
+  useEffect(() => {
+    const onRejected = () => {
+      setWaiting(false)
+      setError('That sign-in link has expired or didn’t come from this app. Sign in again.')
+    }
+    window.addEventListener(SIGN_IN_REJECTED_EVENT, onRejected)
+    return () => window.removeEventListener(SIGN_IN_REJECTED_EVENT, onRejected)
+  }, [])
+
+  // The app can't sign in before it knows which server to use.
+  if (!server) return <Navigate to="/server" replace />
+
   async function open(path: 'login' | 'register') {
+    if (!server) return
     setError('')
     try {
-      const target = beginDesktopSignIn(server ?? '')
-      await openExternal(path === 'login' ? target : `${server}/register?next=${encodeURIComponent(target.slice((server ?? '').length))}`)
+      const target = beginDesktopSignIn(server)
+      await openExternal(path === 'login' ? target : `${server}/register?next=${encodeURIComponent(target.slice(server.length))}`)
       setWaiting(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Couldn’t open the browser.')

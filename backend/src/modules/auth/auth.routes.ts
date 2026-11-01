@@ -10,7 +10,7 @@ import { signAccessToken } from '../../utils/jwt.js'
 import { rateLimit } from '../../middleware/rate-limit.middleware.js'
 import { createOAuthClient } from '../google/google.service.js'
 import { completeGoogleLogin, roleForNewUser } from './google-login.js'
-import { oauthClientSchema, oauthReturnUrl } from '../../utils/oauth-return.js'
+import { oauthReturnUrl } from '../../utils/oauth-return.js'
 
 export const authRouter = Router()
 
@@ -78,10 +78,9 @@ authRouter.post('/login', credentialLimiter, async (req, res, next) => {
 
 authRouter.get('/google/url', async (req, res, next) => {
   try {
-    const client = oauthClientSchema.parse(req.query.client ?? undefined)
     const config = await prisma.providerConfig.findFirstOrThrow({ where: { userId: null, provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
     const state = randomToken()
-    await prisma.oauthState.create({ data: { providerConfigId: config.id, flow: 'login', client, stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
+    await prisma.oauthState.create({ data: { providerConfigId: config.id, flow: 'login', stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
     const oauth = createOAuthClient(config)
     const url = oauth.generateAuthUrl({
       access_type: 'offline',

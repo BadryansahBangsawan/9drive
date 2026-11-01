@@ -3,15 +3,15 @@ import { useNavigate } from 'react-router-dom'
 import { getApiUrl } from '@/lib/api'
 import { getAccessToken, getRefreshToken, onAuthChange, setAccessToken } from '@/lib/auth'
 import { ask, invoke, listen, offerUpdate, onDeepLink, uploader } from '@/lib/desktop'
-import { acceptDesktopSignIn } from '@/lib/desktop-auth'
+import { acceptDesktopSignIn, SIGN_IN_REJECTED_EVENT } from '@/lib/desktop-auth'
 
 // Desktop only (rendered by App inside the router). Connects the React app to the native side:
 // - hands the session tokens to the native uploader, and takes back tokens it refreshed;
-// - turns ninedrive:// links (Google sign-in / connect finishing in the browser) into navigation;
+// - turns ninedrive:// links (website sign-in, Google account connect) into navigation;
 // - offers app updates;
 // - asks before quitting while uploads are running (they resume on the next launch either way).
 // Deep links already acted on. The plugin reports the launch link again (getCurrent) every time
-// it's asked, and a google-auth token works only once: replaying it would sign the user out.
+// it's asked, and a sign-in token works only once: replaying it would sign the user out.
 // Kept in localStorage so a reloaded window doesn't act on them again either.
 const HANDLED_KEY = '9drive:handled-links'
 function readHandled(): string[] {
@@ -50,14 +50,13 @@ export function DesktopBridge() {
           if (!markHandled(raw)) continue
           let url: URL
           try { url = new URL(raw) } catch { continue }
-          // ninedrive://google-auth?token=… → the web app's handoff page; ninedrive://google-connected?status=…
+          // ninedrive://auth?token=…&state=… (signed in on the website) or ninedrive://google-connected?status=…
+          // Nothing else is accepted: a sign-in link without this app's state could come from any page.
           const page = url.host || url.pathname.replace(/^\/+/, '')
           if (page === 'auth') {
-            // Signed in on the website: only for the sign-in this app started (matching state).
             if (acceptDesktopSignIn(url.searchParams.get('state'))) navigateRef.current(`/google-auth?token=${encodeURIComponent(url.searchParams.get('token') ?? '')}`)
-            else console.warn('Ignored a sign-in link this app did not ask for')
-          } else if (page === 'google-auth') navigateRef.current(`/google-auth${url.search}`)
-          else if (page === 'google-connected') {
+            else window.dispatchEvent(new Event(SIGN_IN_REJECTED_EVENT))
+          } else if (page === 'google-connected') {
             window.dispatchEvent(new CustomEvent('9drive:google-connected', { detail: url.searchParams.get('status') ?? 'error' }))
             navigateRef.current('/quota')
           }

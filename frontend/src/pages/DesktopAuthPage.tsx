@@ -4,7 +4,8 @@ import { Monitor } from 'lucide-react'
 import { AuthLogo, AuthShell } from '@/components/auth/AuthShell'
 import { Button } from '@/components/ui/button'
 import { apiFetch } from '@/lib/api'
-import { clearAuthSession, getStoredUser } from '@/lib/auth'
+import { getStoredUser } from '@/lib/auth'
+import { logout } from '@/lib/session'
 
 // Web page the desktop app opens to sign in (/desktop-auth?state=…). The user is signed in here
 // (ProtectedRoute sends them through /login first), confirms, and the app gets a one-time token
@@ -32,9 +33,10 @@ export function DesktopAuthPage() {
     }
   }
 
-  function switchAccount() {
-    clearAuthSession()
-    window.location.assign(`/login?next=${encodeURIComponent(`/desktop-auth?state=${state}`)}`)
+  // Signs this browser out for real (the server session too), then back in with another account.
+  async function switchAccount() {
+    setWorking(true)
+    await logout(() => window.location.assign(`/login?next=${encodeURIComponent(`/desktop-auth?state=${state}`)}`))
   }
 
   if (!statePattern.test(state)) {
@@ -57,7 +59,7 @@ export function DesktopAuthPage() {
       </p>
       {error ? <p role="alert" className="mt-4 text-[13px] text-danger">{error}</p> : null}
       <Button size="lg" className="mt-6 w-full" disabled={working} onClick={signInApp}>{working ? 'Opening the app…' : 'Open 9Drive app'}</Button>
-      <Button variant="ghost" className="mt-2 w-full" onClick={switchAccount}>Use a different account</Button>
+      <Button variant="ghost" className="mt-2 w-full" disabled={working} onClick={switchAccount}>Use a different account</Button>
     </AuthShell>
   )
 }

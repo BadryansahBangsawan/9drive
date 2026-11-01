@@ -15,27 +15,32 @@ const RELEASES_PAGE = `https://github.com/${RELEASES_REPO}/releases`
 type Asset = { name: string; size: number; browser_download_url: string }
 type Release = { tag_name: string; published_at: string; html_url: string; assets: Asset[] }
 type Platform = 'mac' | 'windows' | 'linux'
-type Installer = { platform: Platform; label: string; note: string; pattern: RegExp }
+type Installer = { platform: Platform; label: string; buttonLabel: string; note: string; pattern: RegExp }
 
 // File names tauri-action gives the installers.
 const installers: Installer[] = [
-  { platform: 'mac', label: 'macOS · Apple Silicon', note: 'M1 and newer', pattern: /_aarch64\.dmg$/ },
-  { platform: 'mac', label: 'macOS · Intel', note: 'Intel Macs', pattern: /_x64\.dmg$/ },
-  { platform: 'windows', label: 'Windows', note: 'Installer (.exe)', pattern: /-setup\.exe$/ },
-  { platform: 'windows', label: 'Windows', note: 'MSI package', pattern: /\.msi$/ },
-  { platform: 'linux', label: 'Linux', note: 'AppImage, any distribution', pattern: /\.AppImage$/ },
-  { platform: 'linux', label: 'Linux', note: 'Debian / Ubuntu (.deb)', pattern: /\.deb$/ },
-  { platform: 'linux', label: 'Linux', note: 'Fedora / openSUSE (.rpm)', pattern: /\.rpm$/ },
+  { platform: 'mac', label: 'macOS · Apple Silicon', buttonLabel: 'macOS (Apple Silicon)', note: 'M1 and newer', pattern: /_aarch64\.dmg$/ },
+  { platform: 'mac', label: 'macOS · Intel', buttonLabel: 'macOS (Intel)', note: 'Intel Macs', pattern: /_x64\.dmg$/ },
+  { platform: 'windows', label: 'Windows', buttonLabel: 'Windows', note: 'Installer (.exe)', pattern: /-setup\.exe$/ },
+  { platform: 'windows', label: 'Windows', buttonLabel: 'Windows (MSI)', note: 'MSI package', pattern: /\.msi$/ },
+  { platform: 'linux', label: 'Linux', buttonLabel: 'Linux (AppImage)', note: 'AppImage, any distribution', pattern: /\.AppImage$/ },
+  { platform: 'linux', label: 'Linux', buttonLabel: 'Linux (.deb)', note: 'Debian / Ubuntu (.deb)', pattern: /\.deb$/ },
+  { platform: 'linux', label: 'Linux', buttonLabel: 'Linux (.rpm)', note: 'Fedora / openSUSE (.rpm)', pattern: /\.rpm$/ },
 ]
 
 const platformNames: Record<Platform, string> = { mac: 'macOS', windows: 'Windows', linux: 'Linux' }
 
+type UANavigator = Navigator & { userAgentData?: { platform?: string; getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }> } }
+
+// Phones and tablets get no recommendation: iOS says "like Mac OS X", iPadOS can claim to be a Mac
+// (told apart by its touch screen), and Android says "Linux".
 function detectPlatform(): Platform | null {
-  const nav = navigator as Navigator & { userAgentData?: { platform?: string } }
+  const nav = navigator as UANavigator
   const value = `${nav.userAgentData?.platform ?? ''} ${navigator.platform} ${navigator.userAgent}`.toLowerCase()
-  if (value.includes('mac')) return 'mac'
+  if (/iphone|ipad|ipod|android/.test(value)) return null
+  if (value.includes('mac')) return navigator.maxTouchPoints > 1 ? null : 'mac'
   if (value.includes('win')) return 'windows'
-  if (value.includes('linux') && !value.includes('android')) return 'linux'
+  if (value.includes('linux')) return 'linux'
   return null
 }
 
@@ -43,6 +48,8 @@ export function DownloadAppPage() {
   const [release, setRelease] = useState<Release | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'none' | 'error'>('loading')
   const platform = detectPlatform()
+  // Chromium browsers can tell an Intel Mac; others (Safari) can't, so Apple Silicon is assumed.
+  const [intelMac, setIntelMac] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -51,17 +58,25 @@ export function DownloadAppPage() {
         if (cancelled) return
         if (response.status === 404) return setState('none')
         if (!response.ok) return setState('error')
-        setRelease(await response.json() as Release)
+        const data = await response.json() as Release
+        if (cancelled) return
+        setRelease(data)
         setState('ready')
       })
       .catch(() => { if (!cancelled) setState('error') })
+    if (platform === 'mac') {
+      (navigator as UANavigator).userAgentData?.getHighEntropyValues?.(['architecture'])
+        .then((values) => { if (!cancelled && values.architecture === 'x86') setIntelMac(true) })
+        .catch(() => undefined)
+    }
     return () => { cancelled = true }
-  }, [])
+  }, [platform])
 
   const available = installers
     .map((installer) => ({ installer, asset: release?.assets.find((asset) => installer.pattern.test(asset.name)) }))
     .filter((entry): entry is { installer: Installer; asset: Asset } => !!entry.asset)
-  const recommended = available.find((entry) => entry.installer.platform === platform)
+  const recommended = available.find((entry) => entry.installer.platform === platform && (platform !== 'mac' || /_x64\./.test(entry.asset.name) === intelMac))
+    ?? available.find((entry) => entry.installer.platform === platform)
   const backTo = getAccessToken() ? '/all-files' : '/login'
 
   return (
@@ -77,9 +92,9 @@ export function DownloadAppPage() {
           {recommended ? (
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <a href={recommended.asset.browser_download_url} className={cn(buttonVariants({ size: 'lg' }), 'h-10 px-5 text-[14px]')}>
-                <Download className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />Download for {recommended.installer.label.replace(' · ', ' (')}{recommended.installer.label.includes(' · ') ? ')' : ''}
+                <Download className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />Download for {recommended.installer.buttonLabel}
               </a>
-              <span className="text-[13px] text-muted">{formatBytes(recommended.asset.size)} · {release?.tag_name.replace(/^desktop-/, '')}</span>
+              <span className="text-[13px] text-muted">{formatBytes(recommended.asset.size)} · {release?.tag_name.replace(/^desktop-/, '')}{platform === 'mac' ? ' · Other Macs: see below' : ''}</span>
             </div>
           ) : null}
         </section>
@@ -101,7 +116,7 @@ export function DownloadAppPage() {
               {available.map(({ installer, asset }) => (
                 <div key={asset.name} className="flex flex-wrap items-center gap-3 px-4 py-3">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-medium text-text">{installer.label}{installer.platform === platform ? <span className="ml-2 text-[12px] font-normal text-accent">Your system</span> : null}</p>
+                    <p className="text-[13px] font-medium text-text">{installer.label}{asset === recommended?.asset ? <span className="ml-2 text-[12px] font-normal text-accent">Your system</span> : null}</p>
                     <p className="truncate text-[12px] text-muted" title={asset.name}>{installer.note} · {formatBytes(asset.size)}</p>
                   </div>
                   <a href={asset.browser_download_url} className={buttonVariants({ variant: 'secondary' })}>

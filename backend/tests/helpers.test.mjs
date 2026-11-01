@@ -52,8 +52,10 @@ test('completedPartsInOrder wants every part once, with an ETag', () => {
   assert.equal(completedPartsInOrder([{ partNumber: 1, etag: '' }], 1), null)
 })
 
-test('oauthReturnUrl sends desktop flows to /desktop-return with the ninedrive:// link in the fragment', () => {
-  assert.equal(oauthReturnUrl('https://drive.example', 'desktop', 'google-auth', { token: 'abc' }), `https://drive.example/desktop-return#${encodeURIComponent('ninedrive://google-auth?token=abc')}`)
+test('oauthReturnUrl sends desktop connects to /desktop-return with the ninedrive:// link in the fragment', () => {
+  assert.equal(oauthReturnUrl('https://drive.example', 'desktop', 'google-connected', { status: 'success' }), `https://drive.example/desktop-return#${encodeURIComponent('ninedrive://google-connected?status=success')}`)
+  // A sign-in token never goes to the app through a deep link.
+  assert.equal(oauthReturnUrl('https://drive.example', 'desktop', 'google-auth', { token: 'abc' }), 'https://drive.example/google-auth?token=abc')
   assert.match(oauthReturnUrl('https://drive.example', 'web', 'google-connected', { status: 'success' }), /^https:\/\/drive\.example\/google-connected\?status=success$/)
 })
 
