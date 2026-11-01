@@ -18,6 +18,7 @@ import { TrashPage } from '@/pages/TrashPage'
 import { ActivityLogPage } from '@/pages/ActivityLogPage'
 import { UploadProvider } from '@/context/UploadContext'
 import { ServerSetupPage } from '@/pages/ServerSetupPage'
+import { DesktopReturnPage } from '@/pages/DesktopReturnPage'
 import { DesktopBridge } from '@/components/desktop/DesktopBridge'
 import { getServerUrl, isDesktop } from '@/lib/runtime'
 import { useState } from 'react'
@@ -37,6 +38,7 @@ function App() {
       <Route path="register" element={<RegisterPage />} />
       <Route path="google-auth" element={<GoogleAuthPage />} />
       <Route path="google-connected" element={<GoogleConnectedPage />} />
+      <Route path="desktop-return" element={<DesktopReturnPage />} />
       <Route path="public/files/:token" element={<PublicFilePage />} />
       <Route path="public/files/:token/embed" element={<PublicFilePage embed />} />
       <Route element={<ProtectedRoute />}>
