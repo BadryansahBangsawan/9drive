@@ -4,6 +4,7 @@ import { AuthLogo, AuthShell } from '@/components/auth/AuthShell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { clearAuthSession } from '@/lib/auth'
+import { serverInfo } from '@/lib/desktop'
 import { DEFAULT_SERVER_URL, getServerUrl, normalizeServerUrl, setServerUrl } from '@/lib/runtime'
 
 // Desktop only: the 9Drive server this app signs in to. Shown at first launch and from the sign-in
@@ -24,17 +25,24 @@ export function ServerSetupPage({ onSaved }: { onSaved?: () => void }) {
     }
     setChecking(true)
     setError('')
+    // First from the native side (no CORS): is there a 9Drive server at all?
+    const info = await serverInfo(url).catch(() => null)
+    if (info?.status !== 'ok') {
+      setError(`Couldn’t reach a 9Drive server at ${url}. Check the address and your connection.`)
+      setChecking(false)
+      return
+    }
     try {
+      // Then from this window: the server must allow the desktop app (9Drive 1.3.0 or later).
       const response = await fetch(`${url}/api/health`)
-      const data = response.ok ? await response.json().catch(() => null) as { status?: string } | null : null
-      if (data?.status !== 'ok') throw new Error('not a 9Drive server')
+      if (!response.ok) throw new Error('health check failed')
       // Tokens belong to the server that issued them.
       if (url !== current) clearAuthSession()
       setServerUrl(url)
       onSaved?.()
       navigate('/login', { replace: true })
     } catch {
-      setError(`Couldn’t reach a 9Drive server at ${url}. Check the address and your connection.`)
+      setError(`This server runs 9Drive ${info.version ?? '(unknown version)'}, which doesn’t accept the desktop app yet. Update it to 1.3.0 or later (Settings → Update in the web app), then try again.`)
     } finally {
       setChecking(false)
     }

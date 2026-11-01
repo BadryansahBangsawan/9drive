@@ -11,6 +11,7 @@ export const listen = unavailable as typeof Desktop.listen
 export const uploader: typeof Desktop.uploader = {
   configure: unavailable, enqueue: unavailable, list: unavailable, pause: unavailable, resume: unavailable, cancel: unavailable, clearFinished: unavailable,
 }
+export const serverInfo = unavailable as typeof Desktop.serverInfo
 export const inspectPaths = unavailable as typeof Desktop.inspectPaths
 export const pickFiles = unavailable as typeof Desktop.pickFiles
 export const onFileDrop = unavailable as typeof Desktop.onFileDrop

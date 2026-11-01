@@ -36,6 +36,12 @@ export const uploader = {
   clearFinished: () => invoke<NativeUpload[]>('uploader_clear_finished'),
 }
 
+// /api/health asked from the native side (no CORS): tells an unreachable server from one whose
+// CORS doesn't allow the desktop app yet (older than 1.3.0).
+export function serverInfo(url: string) {
+  return invoke<{ status: string | null; version: string | null }>('server_info', { url })
+}
+
 // Names and sizes of local files; folders and unreadable paths are left out.
 export function inspectPaths(paths: string[]) {
   return invoke<PickedFile[]>('inspect_paths', { paths })

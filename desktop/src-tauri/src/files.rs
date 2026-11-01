@@ -30,3 +30,29 @@ pub fn inspect_paths(paths: Vec<String>) -> Vec<LocalFile> {
 pub fn modified_ms(meta: &std::fs::Metadata) -> Option<u64> {
     meta.modified().ok()?.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
 }
+
+#[derive(Serialize)]
+pub struct ServerInfo {
+    pub status: Option<String>,
+    pub version: Option<String>,
+}
+
+/// Asks a 9Drive server for /api/health from the native side, where CORS doesn't apply. The window
+/// can then tell "not a 9Drive server / unreachable" apart from "server too old for the desktop app"
+/// (reachable here, but its CORS refuses the app's window).
+#[tauri::command]
+pub async fn server_info(url: String) -> Result<ServerInfo, String> {
+    #[derive(serde::Deserialize)]
+    struct Health {
+        status: Option<String>,
+        version: Option<String>,
+    }
+    let response = reqwest::Client::new()
+        .get(format!("{}/api/health", url.trim_end_matches('/')))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let health: Health = response.json().await.map_err(|e| e.to_string())?;
+    Ok(ServerInfo { status: health.status, version: health.version })
+}

@@ -37,6 +37,11 @@ pub fn run() {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 let _ = app.deep_link().register_all();
             }
+            // Debug builds open the web inspector, to see console errors.
+            #[cfg(debug_assertions)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+            }
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let api = api::Api::new(app.handle().clone());
@@ -68,6 +73,7 @@ pub fn run() {
             download::download_start,
             download::download_cancel,
             files::inspect_paths,
+            files::server_info,
             app_exit,
         ])
         .run(tauri::generate_context!())
