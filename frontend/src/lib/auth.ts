@@ -10,6 +10,16 @@ const ACCESS_TOKEN_KEY = '9drive.accessToken'
 const REFRESH_TOKEN_KEY = '9drive.refreshToken'
 const USER_KEY = '9drive.user'
 
+// Lets the desktop app hand fresh tokens to its native uploader.
+const listeners = new Set<() => void>()
+export function onAuthChange(listener: () => void) {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+function notify() {
+  for (const listener of listeners) listener()
+}
+
 export function getAccessToken() {
   return localStorage.getItem(ACCESS_TOKEN_KEY)
 }
@@ -27,6 +37,7 @@ export function setAuthSession(accessToken: string, refreshToken: string, user: 
   localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
   localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
   localStorage.setItem(USER_KEY, JSON.stringify(user))
+  notify()
 }
 
 export function updateStoredUser(user: AuthUser) {
@@ -34,11 +45,14 @@ export function updateStoredUser(user: AuthUser) {
 }
 
 export function setAccessToken(accessToken: string) {
+  if (localStorage.getItem(ACCESS_TOKEN_KEY) === accessToken) return
   localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+  notify()
 }
 
 export function clearAuthSession() {
   localStorage.removeItem(ACCESS_TOKEN_KEY)
   localStorage.removeItem(REFRESH_TOKEN_KEY)
   localStorage.removeItem(USER_KEY)
+  notify()
 }

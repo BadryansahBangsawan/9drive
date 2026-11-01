@@ -11,6 +11,7 @@ import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { completeGoogleLogin } from '../auth/google-login.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
 import { assertSafeS3Endpoint, syncS3Quota, testS3Connection } from '../s3/s3.service.js'
+import { oauthClientSchema, oauthReturnUrl } from '../../utils/oauth-return.js'
 
 export const connectedAccountRouter = Router()
 
@@ -66,12 +67,12 @@ connectedAccountRouter.get('/', requireAuth, async (req: AuthRequest, res, next)
 })
 
 async function createGoogleConnectUrl(req: AuthRequest) {
-  const query = z.object({ providerConfigId: z.string().min(1).optional() }).parse(req.query)
+  const query = z.object({ providerConfigId: z.string().min(1).optional(), client: oauthClientSchema }).parse(req.query)
   const config = query.providerConfigId
     ? await prisma.providerConfig.findFirstOrThrow({ where: { id: query.providerConfigId, OR: [{ userId: req.user!.id }, { userId: null }], provider: 'google_drive', status: 'active' } })
     : await prisma.providerConfig.findFirstOrThrow({ where: { userId: null, provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
   const state = randomToken()
-  await prisma.oauthState.create({ data: { userId: req.user!.id, providerConfigId: config.id, flow: 'connect', stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
+  await prisma.oauthState.create({ data: { userId: req.user!.id, providerConfigId: config.id, flow: 'connect', client: query.client, stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
   const client = createOAuthClient(config)
   return client.generateAuthUrl({
     access_type: 'offline',
@@ -196,8 +197,8 @@ connectedAccountRouter.get('/google/callback', async (req, res) => {
 
     if (oauthState.flow === 'login') {
       const handoffToken = await completeGoogleLogin(oauthState, tokens, profile.data)
-      if (!handoffToken) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
-      return res.redirect(`${env.FRONTEND_URL}/google-auth?token=${handoffToken}`)
+      if (!handoffToken) return res.redirect(oauthReturnUrl(env.FRONTEND_URL, oauthState.client, 'google-auth', { status: 'error' }))
+      return res.redirect(oauthReturnUrl(env.FRONTEND_URL, oauthState.client, 'google-auth', { token: handoffToken }))
     }
 
     if (oauthState.flow !== 'connect' || !oauthState.userId) return res.status(400).json({ code: 'GOOGLE_OAUTH_STATE_INVALID', message: 'OAuth state expired.' })
@@ -237,7 +238,7 @@ connectedAccountRouter.get('/google/callback', async (req, res) => {
     syncGoogleDriveInBackground(account.id, account.userId)
     await createAuditLog(oauthState.userId, 'CONNECT_ACCOUNT', 'account', account.id, { provider: 'google_drive', accountLabel: accountLabel(account) })
     await syncGoogleQuota(account.id)
-    return res.redirect(`${env.FRONTEND_URL}/google-connected?status=success`)
+    return res.redirect(oauthReturnUrl(env.FRONTEND_URL, oauthState.client, 'google-connected', { status: 'success' }))
   } catch (error) {
     console.error('Google OAuth callback failed:', error)
     return res.redirect(`${env.FRONTEND_URL}/google-connected?status=error`)

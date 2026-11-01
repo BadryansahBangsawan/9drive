@@ -3,10 +3,16 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
 
-export default defineConfig({
+// `--mode desktop` builds the app for the Tauri shell (desktop/): no PWA/service worker, its own
+// output folder, and VITE_DESKTOP=1 from .env.desktop.
+export default defineConfig(({ mode }) => ({
+  build: mode === 'desktop' ? { outDir: 'dist-desktop', emptyOutDir: true } : undefined,
+  // The Tauri dev server URL is fixed in desktop/src-tauri/tauri.conf.json.
+  server: mode === 'desktop' ? { port: 1420, strictPort: true } : undefined,
+  clearScreen: mode === 'desktop' ? false : undefined,
   plugins: [
     react(),
-    VitePWA({
+    mode !== 'desktop' && VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png'],
       manifest: {
@@ -33,8 +39,10 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: [
+      // Web builds get a stub, so no Tauri code ships to browsers.
+      { find: /^@\/lib\/desktop$/, replacement: path.resolve(__dirname, mode === 'desktop' ? './src/lib/desktop.ts' : './src/lib/desktop-web.ts') },
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+    ],
   },
-})
+}))

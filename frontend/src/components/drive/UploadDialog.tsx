@@ -7,13 +7,16 @@ import { accountLabel, type ConnectedAccount } from '@/lib/accounts'
 import { cn } from '@/lib/utils'
 import { FolderPicker } from '@/components/drive/FolderPicker'
 import { useUpload } from '@/context/UploadContext'
+import { isDesktop } from '@/lib/runtime'
+import { onFileDrop, pickFiles, inspectPaths } from '@/lib/desktop'
 
 const selectClass = 'h-9 w-full rounded-lg border border-border bg-bg px-3 text-[13px] text-text outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent/25'
 const fieldLabelClass = 'grid gap-1.5 text-[13px] font-medium text-text'
 
 export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClose: () => void; folderId: string | null }) {
-  const { uploadFiles } = useUpload()
-  const [files, setFiles] = useState<File[]>([])
+  const { uploadFiles, uploadPaths } = useUpload()
+  // Web: browser File objects. Desktop: local paths with names and sizes.
+  const [files, setFiles] = useState<Array<{ name: string; size: number; file?: File; path?: string }>>([])
   const [dragging, setDragging] = useState(false)
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
   const [targetFolderId, setTargetFolderId] = useState('')
@@ -39,8 +42,27 @@ export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClo
 
   function pick(list: FileList | File[] | null | undefined) {
     const next = Array.from(list ?? [])
-    if (next.length > 0) setFiles(next)
+    if (next.length > 0) setFiles(next.map((file) => ({ name: file.name, size: file.size, file })))
   }
+
+  function pickLocal(picked: Array<{ path: string; name: string; size: number }>) {
+    if (picked.length > 0) setFiles(picked)
+  }
+
+  // Desktop: files dragged in from Finder/Explorer arrive as paths through Tauri, not as a drop event.
+  useEffect(() => {
+    if (!isDesktop || !open) return
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    onFileDrop((paths) => { inspectPaths(paths).then(pickLocal).catch(() => undefined) }, setDragging).then((fn) => {
+      if (disposed) fn()
+      else unlisten = fn
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [open])
 
   function onDrag(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault()
@@ -55,7 +77,10 @@ export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClo
     if (files.length === 0) return
     const queued = [...files]
     onClose()
-    uploadFiles(queued, targetFolderId || null, targetAccountId || null).catch((error) => console.error('Upload failed', error))
+    const upload = isDesktop
+      ? uploadPaths(queued.flatMap((f) => (f.path ? [f.path] : [])), targetFolderId || null, targetAccountId || null)
+      : uploadFiles(queued.flatMap((f) => (f.file ? [f.file] : [])), targetFolderId || null, targetAccountId || null)
+    upload.catch((error) => console.error('Upload failed', error))
   }
 
   return (
@@ -86,7 +111,17 @@ export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClo
         >
           <Upload className={cn('mx-auto h-6 w-6', dragging ? 'text-accent' : 'text-muted')} strokeWidth={1.5} aria-hidden="true" />
           <span className="text-[13px] font-medium text-text">Drop files here or click to browse</span>
-          <input type="file" multiple className="sr-only" onChange={(event) => pick(event.target.files)} />
+          {isDesktop ? (
+            <button
+              type="button"
+              className="sr-only"
+              onClick={(event) => { event.preventDefault(); pickFiles().then(pickLocal).catch((error) => console.error('Choosing files failed', error)) }}
+            >
+              Choose files
+            </button>
+          ) : (
+            <input type="file" multiple className="sr-only" onChange={(event) => pick(event.target.files)} />
+          )}
         </label>
 
         {files.length > 0 ? (

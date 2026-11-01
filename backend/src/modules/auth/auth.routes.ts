@@ -10,6 +10,7 @@ import { signAccessToken } from '../../utils/jwt.js'
 import { rateLimit } from '../../middleware/rate-limit.middleware.js'
 import { createOAuthClient } from '../google/google.service.js'
 import { completeGoogleLogin, roleForNewUser } from './google-login.js'
+import { oauthClientSchema, oauthReturnUrl } from '../../utils/oauth-return.js'
 
 export const authRouter = Router()
 
@@ -75,13 +76,14 @@ authRouter.post('/login', credentialLimiter, async (req, res, next) => {
   }
 })
 
-authRouter.get('/google/url', async (_req, res, next) => {
+authRouter.get('/google/url', async (req, res, next) => {
   try {
+    const client = oauthClientSchema.parse(req.query.client ?? undefined)
     const config = await prisma.providerConfig.findFirstOrThrow({ where: { userId: null, provider: 'google_drive', status: 'active' }, orderBy: { createdAt: 'desc' } })
     const state = randomToken()
-    await prisma.oauthState.create({ data: { providerConfigId: config.id, flow: 'login', stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
-    const client = createOAuthClient(config)
-    const url = client.generateAuthUrl({
+    await prisma.oauthState.create({ data: { providerConfigId: config.id, flow: 'login', client, stateHash: hashToken(state), expiresAt: new Date(Date.now() + 10 * 60_000) } })
+    const oauth = createOAuthClient(config)
+    const url = oauth.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
       include_granted_scopes: true,
@@ -98,7 +100,7 @@ authRouter.get('/google/callback', async (req, res) => {
   try {
     const query = z.object({ code: z.string(), state: z.string() }).parse(req.query)
     const oauthState = await prisma.oauthState.findUniqueOrThrow({ where: { stateHash: hashToken(query.state) }, include: { providerConfig: true } })
-    if (oauthState.flow !== 'login' || oauthState.usedAt || oauthState.expiresAt < new Date()) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
+    if (oauthState.flow !== 'login' || oauthState.usedAt || oauthState.expiresAt < new Date()) return res.redirect(oauthReturnUrl(env.FRONTEND_URL, oauthState.client, 'google-auth', { status: 'error' }))
 
     const client = createOAuthClient(oauthState.providerConfig)
     const { tokens } = await client.getToken(query.code)
@@ -106,8 +108,8 @@ authRouter.get('/google/callback', async (req, res) => {
     const profile = await google.oauth2({ version: 'v2', auth: client }).userinfo.get()
 
     const handoffToken = await completeGoogleLogin(oauthState, tokens, profile.data)
-    if (!handoffToken) return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)
-    return res.redirect(`${env.FRONTEND_URL}/google-auth?token=${handoffToken}`)
+    if (!handoffToken) return res.redirect(oauthReturnUrl(env.FRONTEND_URL, oauthState.client, 'google-auth', { status: 'error' }))
+    return res.redirect(oauthReturnUrl(env.FRONTEND_URL, oauthState.client, 'google-auth', { token: handoffToken }))
   } catch (error) {
     console.error('Google Auth callback failed:', error)
     return res.redirect(`${env.FRONTEND_URL}/google-auth?status=error`)

@@ -9,7 +9,8 @@ import { env } from '../../config/env.js'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { driveParentForFolder, ensureGoogleAppFolder, getAuthedGoogleClient, syncGoogleQuota } from '../google/google.service.js'
-import { buildS3ObjectKey, deleteS3Key, getS3ConfigForAccount, syncS3Quota, uploadS3Object } from '../s3/s3.service.js'
+import { abortS3MultipartUpload, buildS3ObjectKey, completeS3MultipartUpload, createS3MultipartUpload, deleteS3Key, getS3ConfigForAccount, isPrivateS3Endpoint, listS3UploadedParts, presignS3UploadParts, syncS3Quota, uploadS3Object } from '../s3/s3.service.js'
+import { completedPartsInOrder, s3PartCount, s3PartSize } from '../../utils/s3-multipart.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { accountLabel } from '../../utils/account-label.js'
 import { nextOffsetFromRange } from '../../utils/resumable-range.js'
@@ -373,7 +374,9 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
       mimeType: z.string().min(1),
       sizeBytes: z.string().trim().regex(/^\d+$/, 'sizeBytes must be a whole number of bytes.'),
       folderId: z.string().nullable().optional(),
-      targetAccountId: z.string().nullable().optional()
+      targetAccountId: z.string().nullable().optional(),
+      // Desktop app: it sends the bytes straight to Google (session URI) or S3 (presigned parts).
+      direct: z.boolean().optional(),
     }).parse(req.body)
 
     const sizeBytes = BigInt(body.sizeBytes)
@@ -384,10 +387,23 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
     const { folder, account } = await selectUploadAccount(req.user!.id, sizeBytes, folderId, body.targetAccountId)
     if (!account) return res.status(400).json({ code: 'NO_ACCOUNT_WITH_ENOUGH_SPACE', message: 'No connected storage account has enough space.' })
 
-    // S3 uploads go through the multipart endpoint, which creates its own session.
-    if (account.provider !== 'google_drive') {
-      return res.status(201).json({ provider: account.provider, accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
+    if (account.provider === 's3') {
+      const config = await getS3ConfigForAccount(account.id, req.user!.id)
+      // Without `direct`, or for a bucket on a private network the client may not reach, S3 uploads
+      // go through the multipart endpoint (POST /uploads), which creates its own session.
+      if (!body.direct || (config.endpoint && await isPrivateS3Endpoint(config.endpoint))) {
+        return res.status(201).json({ provider: account.provider, direct: false, accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
+      }
+      const session = await prisma.uploadSession.create({
+        data: { userId: req.user!.id, targetConnectedAccountId: account.id, folderId, fileName: body.fileName, mimeType: body.mimeType, sizeBytes, status: 'uploading', provider: 's3' },
+      })
+      const objectKey = buildS3ObjectKey(config, req.user!.id, session.id, body.fileName)
+      const s3UploadId = await createS3MultipartUpload(config, objectKey, body.mimeType)
+      await prisma.uploadSession.update({ where: { id: session.id }, data: { objectKey, s3UploadId } })
+      const partSize = s3PartSize(sizeBytes)
+      return res.status(201).json({ provider: 's3', direct: true, sessionId: session.id, partSize, partCount: s3PartCount(sizeBytes, partSize), accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
     }
+    if (account.provider !== 'google_drive') return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'This account type cannot take uploads.' })
 
     const auth = await getAuthedGoogleClient(account)
     const targetParentId = await driveParentFor(account, folder)
@@ -430,7 +446,9 @@ uploadRouter.post('/resumable/init', requireAuth, async (req: AuthRequest, res, 
       }
     })
 
-    return res.status(201).json({ sessionId: session.id, provider: 'google_drive', accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
+    // The session URI lets whoever holds it upload this one file (no Google token needed), so it
+    // goes only to the client that asked for a direct upload, and is never logged.
+    return res.status(201).json({ sessionId: session.id, provider: 'google_drive', direct: Boolean(body.direct), ...(body.direct ? { uploadUrl: sessionUri } : {}), accountId: account.id, accountLabel: accountLabel(account), offset: 0 })
   } catch (error) {
     return next(error)
   }
@@ -547,6 +565,111 @@ uploadRouter.put('/resumable/chunk/:id', requireAuth, async (req: AuthRequest, r
     })
 
     return res.status(putRes.status >= 500 ? 502 : putRes.status).json({ code: 'UPLOAD_FAILED', message: 'Google Drive rejected the upload chunk.' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Cancels an upload session: aborts an S3 multipart upload, or tells Google to drop the resumable
+// session, and marks it cancelled. A completed session is left alone.
+uploadRouter.delete('/resumable/:id', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const session = await prisma.uploadSession.findFirst({ where: { id: String(req.params.id), userId: req.user!.id } })
+    if (!session) return res.status(404).json({ code: 'UPLOAD_SESSION_NOT_FOUND', message: 'Upload session not found.' })
+    if (session.status === 'completed') return res.json({ status: 'completed' })
+    if (session.provider === 's3' && session.s3UploadId && session.objectKey && session.targetConnectedAccountId) {
+      const config = await getS3ConfigForAccount(session.targetConnectedAccountId, req.user!.id)
+      await abortS3MultipartUpload(config, session.objectKey, session.s3UploadId).catch(() => undefined)
+    } else if (session.googleSessionUri) {
+      await fetch(session.googleSessionUri, { method: 'DELETE' }).catch(() => undefined)
+    }
+    await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'cancelled' } })
+    return res.json({ status: 'cancelled' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// ---- Direct S3 multipart uploads (desktop app) ----
+
+async function loadS3Session(req: AuthRequest) {
+  const session = await prisma.uploadSession.findFirst({ where: { id: String(req.params.id), userId: req.user!.id, provider: 's3' } })
+  if (!session?.s3UploadId || !session.objectKey || !session.targetConnectedAccountId) return null
+  const config = await getS3ConfigForAccount(session.targetConnectedAccountId, req.user!.id)
+  return { session, config, objectKey: session.objectKey, uploadId: session.s3UploadId }
+}
+
+const sessionNotFound = (res: Response) => res.status(404).json({ code: 'UPLOAD_SESSION_NOT_FOUND', message: 'Upload session not found.' })
+
+// Presigned PUT URLs for some parts (valid for an hour; the client asks again for later parts).
+uploadRouter.post('/s3/:id/part-urls', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const body = z.object({ partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(100) }).parse(req.body)
+    const loaded = await loadS3Session(req)
+    if (!loaded) return sessionNotFound(res)
+    if (loaded.session.status !== 'uploading') return res.status(409).json({ code: 'UPLOAD_SESSION_CLOSED', message: `This upload is ${loaded.session.status}.` })
+    const expected = s3PartCount(loaded.session.sizeBytes, s3PartSize(loaded.session.sizeBytes))
+    if (body.partNumbers.some((n) => n > expected)) return res.status(400).json({ code: 'INVALID_PART_NUMBER', message: `This upload has ${expected} parts.` })
+    return res.json({ urls: await presignS3UploadParts(loaded.config, loaded.objectKey, loaded.uploadId, [...new Set(body.partNumbers)]) })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Parts S3 already has, for resuming after a restart.
+uploadRouter.get('/s3/:id/parts', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const loaded = await loadS3Session(req)
+    if (!loaded) return sessionNotFound(res)
+    if (loaded.session.status === 'completed') return res.json({ status: 'completed', parts: [] })
+    return res.json({ status: loaded.session.status, parts: await listS3UploadedParts(loaded.config, loaded.objectKey, loaded.uploadId) })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Finishes the upload: S3 assembles the parts, the object's size is checked against the session,
+// and the File row is created.
+uploadRouter.post('/s3/:id/complete', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const body = z.object({ parts: z.array(z.object({ partNumber: z.number().int().min(1).max(10_000), etag: z.string().min(1).max(255) })).min(1).max(10_000) }).parse(req.body)
+    const loaded = await loadS3Session(req)
+    if (!loaded) return sessionNotFound(res)
+    const { session, config, objectKey, uploadId } = loaded
+    const account = await prisma.connectedAccount.findFirstOrThrow({ where: { id: session.targetConnectedAccountId!, userId: req.user!.id } })
+
+    if (session.status === 'completed') {
+      const existing = await prisma.file.findFirst({ where: { userId: req.user!.id, provider: 's3', providerFileId: objectKey } })
+      if (existing) return res.json({ status: 'completed', file: { ...existing, sizeBytes: existing.sizeBytes.toString() } })
+    }
+    if (session.status !== 'uploading') return res.status(409).json({ code: 'UPLOAD_SESSION_CLOSED', message: `This upload is ${session.status}.` })
+
+    const parts = completedPartsInOrder(body.parts, s3PartCount(session.sizeBytes, s3PartSize(session.sizeBytes)))
+    if (!parts) return res.status(400).json({ code: 'INVALID_PARTS', message: 'Every part must be listed once, with its ETag.' })
+
+    // Claim the session so two complete calls can't both create the File row.
+    const claimed = await prisma.uploadSession.updateMany({ where: { id: session.id, status: 'uploading' }, data: { status: 'completing' } })
+    if (claimed.count === 0) return res.status(409).json({ code: 'UPLOAD_SESSION_CLOSED', message: 'This upload is already being completed.' })
+    let storedBytes: bigint
+    try {
+      storedBytes = await completeS3MultipartUpload(config, objectKey, uploadId, parts)
+    } catch (error) {
+      await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'uploading' } })
+      throw error
+    }
+    if (storedBytes !== session.sizeBytes) {
+      await deleteS3Key(config, objectKey).catch(() => undefined)
+      await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'failed', errorMessage: `Stored ${storedBytes} bytes, expected ${session.sizeBytes}.` } })
+      return res.status(400).json({ code: 'UPLOAD_SIZE_MISMATCH', message: 'The uploaded file is not the size that was announced.' })
+    }
+
+    const file = await prisma.file.create({
+      data: { userId: req.user!.id, connectedAccountId: account.id, folderId: session.folderId, provider: 's3', providerFileId: objectKey, name: session.fileName, mimeType: session.mimeType, sizeBytes: session.sizeBytes, status: 'active' },
+    })
+    await prisma.uploadSession.update({ where: { id: session.id }, data: { status: 'completed', completedAt: new Date() } })
+    await auditUpload(req.user!.id, file, file.sizeBytes, account)
+    syncS3Quota(account.id).catch(() => undefined)
+    return res.status(201).json({ status: 'completed', file: { ...file, sizeBytes: file.sizeBytes.toString() } })
   } catch (error) {
     return next(error)
   }

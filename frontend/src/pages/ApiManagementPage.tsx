@@ -8,11 +8,11 @@ import { Segmented } from '@/components/ui/segmented'
 import { Input } from '@/components/ui/input'
 import { PageHeader } from '@/components/drive/PageHeader'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
-import { API_URL, apiFetch, formatDate } from '@/lib/api'
+import { getApiUrl, apiFetch, formatDate } from '@/lib/api'
 
 type ApiKey = { id: string; name: string; keyPrefix: string; scopes: string[]; status: string; lastUsedAt: string | null; expiresAt: string | null; revokedAt: string | null; createdAt: string }
 
-const curlExample = `curl -X POST "${API_URL}/api/v1/uploads" \\
+const curlExample = `curl -X POST "${getApiUrl()}/api/v1/uploads" \\
   -H "Authorization: Bearer 9d_live_xxx" \\
   -F 'filesMeta=[{"fieldName":"file-0","fileName":"hello.txt","mimeType":"text/plain","sizeBytes":"12"}]' \\
   -F "file-0=@hello.txt;type=text/plain"`
@@ -23,7 +23,7 @@ form.append('filesMeta', JSON.stringify([
 ]))
 form.append('file-0', file)
 
-await fetch('${API_URL}/api/v1/uploads', {
+await fetch('${getApiUrl()}/api/v1/uploads', {
   method: 'POST',
   headers: { Authorization: 'Bearer 9d_live_xxx' },
   body: form,

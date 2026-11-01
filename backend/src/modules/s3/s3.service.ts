@@ -1,4 +1,5 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, ListPartsCommand, S3Client, UploadPartCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { Upload } from '@aws-sdk/lib-storage'
 import type { ConnectedAccount, File, S3StorageConfig } from '@prisma/client'
 import type { Response } from 'express'
@@ -25,13 +26,23 @@ function isPrivateAddress(address: string) {
   return privateRanges.check(mapped, 'ipv6')
 }
 
+async function resolveEndpointHost(endpoint: string) {
+  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, '')
+  return net.isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((entry) => entry.address)
+}
+
+// Whether an S3 endpoint is on a private/loopback network (only reachable from where the server is).
+export async function isPrivateS3Endpoint(endpoint: string) {
+  const addresses = await resolveEndpointHost(endpoint)
+  return addresses.length === 0 || addresses.some(isPrivateAddress)
+}
+
 // Blocks user-supplied S3 endpoints that point at the server's own network (SSRF), unless explicitly allowed.
 export async function assertSafeS3Endpoint(endpoint: string) {
   const url = new URL(endpoint)
   if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new HttpError(400, 'S3_ENDPOINT_INVALID', 'S3 endpoint must be an http(s) URL.')
   if (env.S3_ALLOW_PRIVATE_ENDPOINTS) return
-  const host = url.hostname.replace(/^\[|\]$/g, '')
-  const addresses = net.isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((entry) => entry.address)
+  const addresses = await resolveEndpointHost(endpoint)
   if (addresses.length === 0) throw new HttpError(400, 'S3_ENDPOINT_UNRESOLVED', 'S3 endpoint host could not be resolved.')
   if (addresses.some(isPrivateAddress)) throw new HttpError(400, 'S3_ENDPOINT_NOT_ALLOWED', 'S3 endpoint points to a private network address. Set S3_ALLOW_PRIVATE_ENDPOINTS=true to allow it.')
 }
@@ -71,6 +82,51 @@ export async function uploadS3Object(config: S3Config, key: string, body: NodeJS
     client,
     params: { Bucket: config.bucket, Key: key, Body: body as Readable, ContentType: mimeType },
   }).done()
+}
+
+// ---- Multipart uploads sent straight to the bucket (desktop app). The server opens, signs and
+// completes them; the client only PUTs part bodies to presigned URLs. ----
+
+export async function createS3MultipartUpload(config: S3Config, key: string, mimeType: string) {
+  const response = await createS3Client(config).send(new CreateMultipartUploadCommand({ Bucket: config.bucket, Key: key, ContentType: mimeType }))
+  if (!response.UploadId) throw new Error('S3 did not return an upload id.')
+  return response.UploadId
+}
+
+export async function presignS3UploadParts(config: S3Config, key: string, uploadId: string, partNumbers: number[], expiresIn = 3600) {
+  const client = createS3Client(config)
+  return Promise.all(partNumbers.map(async (partNumber) => ({
+    partNumber,
+    url: await getSignedUrl(client, new UploadPartCommand({ Bucket: config.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber }), { expiresIn }),
+  })))
+}
+
+export async function listS3UploadedParts(config: S3Config, key: string, uploadId: string) {
+  const client = createS3Client(config)
+  const parts: Array<{ partNumber: number; etag: string; size: number }> = []
+  let marker: string | undefined
+  do {
+    const response = await client.send(new ListPartsCommand({ Bucket: config.bucket, Key: key, UploadId: uploadId, PartNumberMarker: marker }))
+    for (const part of response.Parts ?? []) {
+      if (part.PartNumber && part.ETag) parts.push({ partNumber: part.PartNumber, etag: part.ETag, size: part.Size ?? 0 })
+    }
+    marker = response.IsTruncated ? response.NextPartNumberMarker : undefined
+  } while (marker)
+  return parts
+}
+
+export async function completeS3MultipartUpload(config: S3Config, key: string, uploadId: string, parts: Array<{ partNumber: number; etag: string }>) {
+  const client = createS3Client(config)
+  await client.send(new CompleteMultipartUploadCommand({
+    Bucket: config.bucket, Key: key, UploadId: uploadId,
+    MultipartUpload: { Parts: parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) },
+  }))
+  const head = await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }))
+  return BigInt(head.ContentLength ?? 0)
+}
+
+export async function abortS3MultipartUpload(config: S3Config, key: string, uploadId: string) {
+  await createS3Client(config).send(new AbortMultipartUploadCommand({ Bucket: config.bucket, Key: key, UploadId: uploadId }))
 }
 
 export async function deleteS3Key(config: S3Config, key: string) {

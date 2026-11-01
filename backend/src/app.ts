@@ -21,7 +21,7 @@ export const app = express()
 // Trust X-Forwarded-For only from proxies on loopback/private networks (e.g. the bundled nginx).
 app.set('trust proxy', 'loopback, linklocal, uniquelocal')
 
-app.use(cors({ origin: env.FRONTEND_URL }))
+app.use(cors({ origin: [env.FRONTEND_URL, ...env.DESKTOP_APP_ORIGINS] }))
 app.use(express.json({ limit: '1mb' }))
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', version: appVersion }))

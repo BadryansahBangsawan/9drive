@@ -17,7 +17,9 @@ import { defaultFolderIconUrl, folderIconOptions, FolderVisual } from '@/compone
 import { PageHeader } from '@/components/drive/PageHeader'
 import { SelectionBar } from '@/components/drive/SelectionBar'
 import { ShareDialog } from '@/components/drive/ShareDialog'
-import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
+import { getApiUrl, getWebUrl, apiFetch, formatBytes, formatDate } from '@/lib/api'
+import { isDesktop } from '@/lib/runtime'
+import { chooseSavePath, downloadToFile } from '@/lib/desktop'
 import { accountLabel as formatAccountLabel, type ConnectedAccount } from '@/lib/accounts'
 import { getAccessToken } from '@/lib/auth'
 import { createPlyr, ensurePlyr } from '@/lib/plyr'
@@ -506,7 +508,7 @@ export function AllFilesPage() {
     try {
       const data = await apiFetch<{ path?: string; url: string }>(`/files/${activeFile.id}/preview-token`, { method: 'POST' })
       const previewPath = data.path ?? new URL(data.url).pathname
-      setPreviewUrl(`${API_URL}${previewPath}`)
+      setPreviewUrl(`${getApiUrl()}${previewPath}`)
     } catch (error) {
       setPreviewError(error instanceof Error ? error.message : 'Failed to load preview')
     } finally {
@@ -516,8 +518,21 @@ export function AllFilesPage() {
 
   async function downloadFile(file: FileItem | null) {
     if (!file?.id) return
+    if (isDesktop) {
+      // Streamed straight to disk by the native side, so large files never sit in memory.
+      const dest = await chooseSavePath(file.name)
+      if (!dest) return
+      flash(`Downloading ${file.name}…`)
+      try {
+        await downloadToFile({ path: `/files/${file.id}/download`, dest })
+        flash(`Saved ${file.name}.`)
+      } catch (error) {
+        flash(error instanceof Error ? error.message : 'Download failed')
+      }
+      return
+    }
     try {
-      const response = await fetch(`${API_URL}/files/${file.id}/download`, { headers: { Authorization: `Bearer ${getAccessToken()}` } })
+      const response = await fetch(`${getApiUrl()}/files/${file.id}/download`, { headers: { Authorization: `Bearer ${getAccessToken()}` } })
       if (!response.ok) throw new Error('Download failed')
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
@@ -534,10 +549,23 @@ export function AllFilesPage() {
   async function downloadBatchAsZip() {
     const selectedIds = [...selectedFileIds]
     if (selectedIds.length === 0) return
+    if (isDesktop) {
+      const dest = await chooseSavePath('9drive-download.zip')
+      if (!dest) return
+      flash(`Downloading ${selectedIds.length} files as a ZIP…`)
+      try {
+        await downloadToFile({ path: '/files/batch-download', dest, method: 'POST', body: { fileIds: selectedIds } })
+        clearSelection()
+        flash('Batch download complete.')
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Batch download failed')
+      }
+      return
+    }
     setLoading(true)
     setMessage('')
     try {
-      const response = await fetch(`${API_URL}/files/batch-download`, {
+      const response = await fetch(`${getApiUrl()}/files/batch-download`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -632,7 +660,7 @@ export function AllFilesPage() {
 
   async function copyFolderLink() {
     if (!activeFolderForMenu?.id) return
-    let url = `${window.location.origin}/all-files?folderId=${activeFolderForMenu.id}`
+    let url = `${getWebUrl()}/all-files?folderId=${activeFolderForMenu.id}`
     if (activeFolderForMenu.providerFolderId) {
       url = `https://drive.google.com/open?id=${activeFolderForMenu.providerFolderId}`
     }

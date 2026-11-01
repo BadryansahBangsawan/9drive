@@ -11,6 +11,8 @@ import { PageHeader } from '@/components/drive/PageHeader'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 import { accountLabel } from '@/lib/accounts'
 import { apiFetch, formatBytes } from '@/lib/api'
+import { isDesktop } from '@/lib/runtime'
+import { openExternal } from '@/lib/desktop'
 import { cn } from '@/lib/utils'
 
 type ConnectedAccount = {
@@ -112,14 +114,35 @@ export function QuotaTrackerPage() {
       }
       load().then(notifyStorageChanged).catch(() => undefined)
     }
+    // Desktop: the browser hands the result back through a ninedrive:// link (DesktopBridge).
+    function onDesktopConnected(event: Event) {
+      const status = (event as CustomEvent<string>).detail
+      onMessage(new MessageEvent('message', { origin: window.location.origin, data: { type: 'GOOGLE_CONNECTED', status } }))
+    }
     window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
+    window.addEventListener('9drive:google-connected', onDesktopConnected)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      window.removeEventListener('9drive:google-connected', onDesktopConnected)
+    }
   }, [])
 
   async function connectDrive() {
     setConnecting(true)
     setError('')
     setMessage('')
+    if (isDesktop) {
+      try {
+        const data = await apiFetch<{ url: string }>('/connected-accounts/google/connect-url?client=desktop')
+        await openExternal(data.url)
+        setMessage('Continue in your browser. The account appears here when Google is done.')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to start Google Drive connection')
+      } finally {
+        setConnecting(false)
+      }
+      return
+    }
     const popup = window.open('', 'google-drive-connect', 'width=540,height=720')
     if (popup) {
       popup.document.write('<html><head><title>Connecting...</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f8fafc;color:#64748b;}</style></head><body><div style="text-align:center;"><h2>Connecting to Google...</h2><p>Please wait while we redirect you.</p></div></body></html>')

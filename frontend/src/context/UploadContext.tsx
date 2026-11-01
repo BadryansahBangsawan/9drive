@@ -1,21 +1,30 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
-import { API_URL, apiFetch, authedFetch, refreshAccessToken } from '@/lib/api'
+import { isDesktop } from '@/lib/runtime'
+import { DesktopUploadProvider } from '@/context/DesktopUploadProvider'
+import { getApiUrl, apiFetch, authedFetch, refreshAccessToken } from '@/lib/api'
 import { clearAuthSession, getAccessToken } from '@/lib/auth'
 
-export type UploadProgressStatus = 'queued' | 'uploading' | 'done' | 'error' | 'partial'
-export type UploadProgressFile = { id: string; name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string; error?: string }
+export type UploadProgressStatus = 'queued' | 'uploading' | 'paused' | 'done' | 'error' | 'partial'
+// `detail` is a short note shown under an active upload (e.g. waiting for the connection).
+export type UploadProgressFile = { id: string; name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string; error?: string; detail?: string }
 export type UploadProgressState = { open: boolean; fileName: string; percent: number; status: UploadProgressStatus; files: UploadProgressFile[] }
 
 type ResumableSession = { sessionId: string; file: File; folderId?: string | null; targetAccountId?: string | null }
 
-type UploadContextType = {
+export type UploadContextType = {
   uploadProgress: UploadProgressState
   setUploadProgress: React.Dispatch<React.SetStateAction<UploadProgressState>>
+  // Web: browser File objects. Desktop: local paths, uploaded by the native uploader.
   uploadFiles: (files: File[], folderId: string | null, targetAccountId?: string | null) => Promise<void>
+  uploadPaths: (paths: string[], folderId: string | null, targetAccountId?: string | null) => Promise<void>
   retryFailedUpload: (uploadId: string) => Promise<void>
+  // Desktop only.
+  pauseUpload?: (uploadId: string) => Promise<void>
+  resumeUpload?: (uploadId: string) => Promise<void>
+  cancelUpload?: (uploadId: string) => Promise<void>
 }
 
-const UploadContext = createContext<UploadContextType | undefined>(undefined)
+export const UploadContext = createContext<UploadContextType | undefined>(undefined)
 
 // Per-upload ids keep same-named files from sharing progress rows or resumable sessions.
 let uploadCounter = 0
@@ -31,6 +40,10 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
 
 export function UploadProvider({ children }: { children: ReactNode }) {
+  return isDesktop ? <DesktopUploadProvider>{children}</DesktopUploadProvider> : <WebUploadProvider>{children}</WebUploadProvider>
+}
+
+function WebUploadProvider({ children }: { children: ReactNode }) {
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState>({
     open: false,
     fileName: '',
@@ -52,7 +65,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       form.append('file', file, file.name)
 
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${API_URL}/uploads`)
+      xhr.open('POST', `${getApiUrl()}/uploads`)
       xhr.setRequestHeader('Authorization', `Bearer ${getAccessToken()}`)
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable && event.total > 0) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)))
@@ -263,7 +276,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <UploadContext.Provider value={{ uploadProgress, setUploadProgress, uploadFiles, retryFailedUpload }}>
+    <UploadContext.Provider value={{ uploadProgress, setUploadProgress, uploadFiles, uploadPaths: async () => { throw new Error('Local paths can only be uploaded from the desktop app.') }, retryFailedUpload }}>
       {children}
     </UploadContext.Provider>
   )

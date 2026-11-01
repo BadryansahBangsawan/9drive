@@ -5,6 +5,9 @@ import { AuthDivider, AuthLogo, AuthShell } from '@/components/auth/AuthShell'
 import { GoogleLogo } from '@/components/auth/GoogleLogo'
 import { Input } from '@/components/ui/input'
 import { apiFetch } from '@/lib/api'
+import { isDesktop } from '@/lib/runtime'
+import { openExternal } from '@/lib/desktop'
+import { DesktopAuthFooter } from '@/components/desktop/DesktopAuthFooter'
 import { setAuthSession, type AuthUser } from '@/lib/auth'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
@@ -26,6 +29,7 @@ export function RegisterPage() {
   const [password, setPassword] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
   const recaptchaRef = useRef<HTMLDivElement | null>(null)
@@ -60,6 +64,15 @@ export function RegisterPage() {
     setGoogleLoading(true)
     setError('')
     try {
+      if (isDesktop) {
+        // Google blocks sign-in inside embedded webviews: finish in the browser, which returns
+        // through a ninedrive:// link (DesktopBridge).
+        const data = await apiFetch<{ url: string }>('/auth/google/url?client=desktop', { skipAuth: true })
+        await openExternal(data.url)
+        setNotice('Continue in your browser. 9Drive comes back when you are signed in.')
+        setGoogleLoading(false)
+        return
+      }
       const data = await apiFetch<{ url: string }>('/auth/google/url', { skipAuth: true })
       window.location.href = data.url
     } catch (err) {
@@ -112,6 +125,7 @@ export function RegisterPage() {
         <Button size="lg" className="w-full" disabled={loading}>{loading ? 'Creating...' : 'Create account'}</Button>
       </form>
       <p className="mt-5 text-center text-[13px] text-muted">Already registered? <Link className="font-medium text-accent hover:underline" to="/login">Log in</Link></p>
+      <DesktopAuthFooter notice={notice} />
     </AuthShell>
   )
 }

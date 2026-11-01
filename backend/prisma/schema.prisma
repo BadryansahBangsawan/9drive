@@ -124,6 +124,8 @@ model OauthState {
   userId           String?        @map("user_id") @db.Char(36)
   providerConfigId String         @map("provider_config_id") @db.Char(36)
   flow             String         @default("connect") @db.VarChar(32)
+  // web or desktop: where the OAuth callback sends the browser back to (desktop: the 9drive:// link).
+  client           String         @default("web") @db.VarChar(16)
   stateHash        String         @unique @map("state_hash") @db.VarChar(255)
   expiresAt        DateTime       @map("expires_at")
   usedAt           DateTime?      @map("used_at")
@@ -321,6 +323,10 @@ model UploadSession {
   sizeBytes                BigInt            @map("size_bytes")
   status                   String            @db.VarChar(32)
   googleSessionUri         String?           @map("google_session_uri") @db.Text
+  // google_drive (resumable session) or s3 (multipart upload sent straight to the bucket by the desktop app).
+  provider                 String            @default("google_drive") @db.VarChar(32)
+  s3UploadId               String?           @map("s3_upload_id") @db.Text
+  objectKey                String?           @map("object_key") @db.VarChar(1024)
   errorMessage             String?           @map("error_message") @db.Text
   createdAt                DateTime          @default(now()) @map("created_at")
   completedAt              DateTime?         @map("completed_at")

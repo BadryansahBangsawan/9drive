@@ -1,10 +1,23 @@
 import { clearAuthSession, getAccessToken, getRefreshToken, setAccessToken } from '@/lib/auth'
+import { getServerUrl, isDesktop } from '@/lib/runtime'
 
 const isProd = import.meta.env.PROD
 const rawApiUrl = import.meta.env.VITE_API_URL
-export const API_URL = (rawApiUrl && rawApiUrl !== 'http://localhost:4000')
+const webApiUrl = (rawApiUrl && rawApiUrl !== 'http://localhost:4000')
   ? rawApiUrl
   : (isProd ? '/api' : 'http://localhost:4000')
+
+// The backend base URL. The desktop app talks to the server chosen at first launch.
+export function getApiUrl() {
+  if (!isDesktop) return webApiUrl
+  const server = getServerUrl()
+  return server ? `${server}/api` : ''
+}
+
+// The web app's address, for links people open in a browser (shared folder links).
+export function getWebUrl() {
+  return isDesktop ? getServerUrl() ?? '' : window.location.origin
+}
 
 
 type ApiOptions = RequestInit & { skipAuth?: boolean; retry?: boolean }
@@ -12,7 +25,7 @@ type ApiOptions = RequestInit & { skipAuth?: boolean; retry?: boolean }
 export async function refreshAccessToken() {
   const refreshToken = getRefreshToken()
   if (!refreshToken) return false
-  const response = await fetch(`${API_URL}/auth/refresh`, {
+  const response = await fetch(`${getApiUrl()}/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refreshToken }),
@@ -30,7 +43,7 @@ export async function authedFetch(path: string, init: RequestInit = {}): Promise
     const headers = new Headers(init.headers)
     const token = getAccessToken()
     if (token) headers.set('Authorization', `Bearer ${token}`)
-    return fetch(`${API_URL}${path}`, { ...init, headers })
+    return fetch(`${getApiUrl()}${path}`, { ...init, headers })
   }
   const response = await send()
   if (response.status !== 401) return response
@@ -49,7 +62,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   if (!options.skipAuth && token) headers.set('Authorization', `Bearer ${token}`)
   if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers })
+  const response = await fetch(`${getApiUrl()}${path}`, { ...options, headers })
   if (response.status === 401 && options.retry !== false && !options.skipAuth && await refreshAccessToken()) {
     return apiFetch<T>(path, { ...options, retry: false })
   }

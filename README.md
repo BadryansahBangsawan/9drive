@@ -263,6 +263,7 @@ Either way, the credentials are encrypted and stored in MySQL as one global conf
 | `REFRESH_TOKEN_TTL_DAYS` | Refresh token lifetime (default `30`). |
 | `MAX_UPLOAD_BYTES` | Largest allowed upload (default 5 GB). |
 | `RECAPTCHA_SECRET_KEY` | Optional. Turns on captcha for sign-up, together with the frontend site key. |
+| `DESKTOP_APP_ORIGINS` | Optional. Origins of the desktop app's window that CORS also allows (default: the Tauri origins). Set it empty to refuse the desktop app. |
 | `S3_ALLOW_PRIVATE_ENDPOINTS` | Optional, default `false`. Set `true` to allow S3 endpoints on private or loopback addresses, such as a MinIO container on the same network. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Only read by the seed command. The app reads the encrypted copy from the database. |
 
@@ -279,6 +280,30 @@ Either way, the credentials are encrypted and stored in MySQL as one global conf
 Captcha only turns on when **both** `VITE_RECAPTCHA_SITE_KEY` and `RECAPTCHA_SECRET_KEY` are set.
 
 </details>
+
+## Desktop app
+
+`desktop/` is a desktop app for macOS, Windows and Linux ([Tauri](https://tauri.app)). It shows the same interface as the web app, but uploads and downloads run natively, which makes large files practical:
+
+- **Straight to storage.** Files go from your computer directly to Google Drive (the resumable session the server opens) or to S3 (presigned multipart parts). The server only opens the upload and records the file, so speed is not limited by the server or Cloudflare.
+- **Survives anything.** The upload queue is saved on disk. Closing the app, sleep, a dropped connection or a reboot pauses it; it picks up where Google/S3 left off. The computer is kept awake while uploads run.
+- **Pause, resume and cancel** each upload. Downloads stream to disk instead of memory.
+
+On first launch the app asks for your 9Drive address (the one you open in a browser). Signing in with Google, and connecting Google accounts, finish in your browser and come back to the app through a `ninedrive://` link.
+
+**Installers** come from GitHub Releases (`.dmg`, `.msi`/`.exe`, `.AppImage`/`.deb`), and the app updates itself from there. The builds are not code-signed yet: on macOS right-click the app → **Open** the first time; on Windows choose **More info → Run anyway**.
+
+**Building it:**
+
+```bash
+cd frontend && npm ci && cd ../desktop && npm ci
+npm run dev      # dev window against the server you choose at first launch
+npm run build    # installers in desktop/src-tauri/target/release/bundle
+```
+
+Needs Rust (stable) and the [Tauri prerequisites](https://tauri.app/start/prerequisites/). A release build signs updates, so set `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. To publish, bump `version` in `desktop/src-tauri/tauri.conf.json` and push a tag `desktop-vX.Y.Z`: `.github/workflows/desktop.yml` builds every platform into a draft release, and publishing the draft makes the update available.
+
+The server needs 9Drive 1.3.0 or later (desktop CORS and direct uploads).
 
 ## Deploying to a server
 
@@ -444,7 +469,8 @@ Vite bakes `VITE_API_URL` into the build. Rebuild the frontend, or with Docker r
 
 ```txt
 backend/    Express 5 + TypeScript API, Prisma (MySQL), Google Drive and S3 integrations
-frontend/   React 19 + Vite + Tailwind CSS 4 app (installable PWA)
+frontend/   React 19 + Vite + Tailwind CSS 4 app (installable PWA; also the desktop app's UI)
+desktop/    Tauri 2 desktop app: native upload queue and downloads (Rust), auto-update
 docs/       README screenshots and trailer
 ```
 

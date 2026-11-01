@@ -90,8 +90,8 @@ Security rules:
 - Google tokens are encrypted before database storage.
 - App refresh tokens are hashed before database storage.
 - Auth handoff, share, and preview tokens are stored as hashes where applicable.
-- Uploaded files must stream through the backend to Google Drive; do not store uploaded files on disk. They land in the account's `9drive` folder, or in the target folder's Drive counterpart on the same account (an app folder's mirror under `9drive`, or an imported My Drive folder). Resolve the Drive parent with `driveParentForFolder` (`modules/google/google.service.ts`).
-- Keep CORS restricted by `FRONTEND_URL`.
+- Uploaded files must stream through the backend to Google Drive; do not store uploaded files on disk. The one exception is the desktop app (`desktop/`): it sends bytes straight to Google (the resumable session URI from `POST /uploads/resumable/init` with `direct: true`) or S3 (presigned multipart parts, `/uploads/s3/*`). The server still opens every session, picks the account and folder, and records the file only after checking with Google/S3 (`/uploads/resumable/status/:id`, `/uploads/s3/:id/complete`). Google tokens and S3 keys never leave the server, and session URIs are never logged. They land in the account's `9drive` folder, or in the target folder's Drive counterpart on the same account (an app folder's mirror under `9drive`, or an imported My Drive folder). Resolve the Drive parent with `driveParentForFolder` (`modules/google/google.service.ts`).
+- Keep CORS restricted to `FRONTEND_URL` plus the desktop app's origins (`DESKTOP_APP_ORIGINS`).
 - Never grant `anyone` permissions on Drive files automatically; public Drive access is an explicit user action.
 - Serve stored files through `setFileResponseHeaders` (`modules/files/file-response.ts`) so user content cannot run as a page on the app origin.
 - Instance-wide settings (`/system/*`) require `requireAuth` + `requireAdmin`. `User.role` is `admin` or `user`; the first account on an instance without an admin becomes admin.
@@ -229,6 +229,9 @@ Public shared files:
 
 Uploads:
 - `POST /uploads`
+- `POST /uploads/resumable/init` (`direct: true` from the desktop app returns the Google session URI, or opens an S3 multipart upload)
+- `GET /uploads/resumable/status/:id`, `PUT /uploads/resumable/chunk/:id`, `DELETE /uploads/resumable/:id`
+- `POST /uploads/s3/:id/part-urls`, `GET /uploads/s3/:id/parts`, `POST /uploads/s3/:id/complete` (desktop direct S3 uploads)
 - Content type: `multipart/form-data`.
 - Current frontend sends metadata first as `filesMeta`: JSON array of `{ fieldName, fileName, mimeType, sizeBytes, folderId? }`.
 - File fields then match `filesMeta[*].fieldName`, e.g. `file-0`, `file-1`.

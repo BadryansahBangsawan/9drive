@@ -1,25 +1,28 @@
 import { useState } from 'react'
-import { Check, ChevronDown, File as FileIcon, X } from 'lucide-react'
+import { Check, ChevronDown, File as FileIcon, Pause, Play, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatBytes } from '@/lib/api'
 import { useUpload } from '@/context/UploadContext'
 import { cn } from '@/lib/utils'
 
 export function UploadPanel() {
-  const { uploadProgress, setUploadProgress, retryFailedUpload } = useUpload()
+  const { uploadProgress, setUploadProgress, retryFailedUpload, pauseUpload, resumeUpload, cancelUpload } = useUpload()
   const [collapsed, setCollapsed] = useState(false)
   if (!uploadProgress.open) return null
 
   const { files } = uploadProgress
   const total = files.length
   const doneCount = files.filter((f) => f.status === 'done').length
-  const uploading = files.some((f) => f.status === 'uploading')
+  const uploading = files.some((f) => f.status === 'uploading' || f.status === 'queued')
   const failed = files.some((f) => f.status === 'error')
+  const paused = files.some((f) => f.status === 'paused')
   const title = uploading
     ? `Uploading ${Math.min(total, doneCount + 1)} of ${total}`
     : failed
       ? 'Some uploads failed'
-      : 'Upload complete'
+      : paused
+        ? 'Uploads paused'
+        : 'Upload complete'
 
   return (
     <div
@@ -47,10 +50,12 @@ export function UploadPanel() {
                 <p className="truncate text-[13px] text-text" title={file.name}>{file.name}</p>
                 {file.status === 'queued' ? (
                   <p className="truncate text-xs tabular-nums text-muted">{formatBytes(file.size)} · Waiting</p>
-                ) : file.status === 'uploading' ? (
+                ) : file.status === 'uploading' || file.status === 'paused' ? (
                   <>
-                    <p className="truncate text-xs tabular-nums text-muted">
-                      {formatBytes(file.size)}{file.accountLabel ? ` · to ${file.accountLabel}` : ''}
+                    <p className="truncate text-xs tabular-nums text-muted" title={file.detail}>
+                      {file.status === 'paused'
+                        ? `Paused · ${file.percent}% of ${formatBytes(file.size)}`
+                        : file.detail ?? `${formatBytes(file.size)}${file.accountLabel ? ` · to ${file.accountLabel}` : ''}`}
                     </p>
                     <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-hover">
                       <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${file.percent}%` }} />
@@ -63,9 +68,24 @@ export function UploadPanel() {
                 )}
               </div>
               {file.status === 'done' && <Check className="h-4 w-4 shrink-0 text-drive" strokeWidth={1.5} aria-label="Done" />}
-              {file.status === 'error' && (
+              {file.status === 'error' && file.error !== 'Cancelled' && (
                 <Button variant="secondary" size="sm" onClick={() => retryFailedUpload(file.id)}>Retry</Button>
               )}
+              {file.status === 'uploading' && pauseUpload ? (
+                <Button variant="ghost" size="icon" aria-label={`Pause ${file.name}`} onClick={() => pauseUpload(file.id)}>
+                  <Pause className="h-4 w-4" strokeWidth={1.5} />
+                </Button>
+              ) : null}
+              {file.status === 'paused' && resumeUpload ? (
+                <Button variant="ghost" size="icon" aria-label={`Resume ${file.name}`} onClick={() => resumeUpload(file.id)}>
+                  <Play className="h-4 w-4" strokeWidth={1.5} />
+                </Button>
+              ) : null}
+              {(file.status === 'uploading' || file.status === 'paused' || file.status === 'queued') && cancelUpload ? (
+                <Button variant="ghost" size="icon" aria-label={`Cancel ${file.name}`} onClick={() => cancelUpload(file.id)}>
+                  <X className="h-4 w-4" strokeWidth={1.5} />
+                </Button>
+              ) : null}
             </li>
           ))}
         </ul>

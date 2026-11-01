@@ -29,3 +29,30 @@ test('nextOffsetFromRange uses the last persisted byte', () => {
   assert.equal(nextOffsetFromRange(undefined), 0n)
   assert.equal(nextOffsetFromRange('garbage'), 0n)
 })
+
+import { s3PartSize, s3PartCount, completedPartsInOrder, S3_DEFAULT_PART_BYTES } from '../dist/utils/s3-multipart.js'
+import { oauthReturnUrl } from '../dist/utils/oauth-return.js'
+
+test('s3PartSize keeps 64 MiB until a file needs more than 10,000 parts', () => {
+  const MiB = 1024n * 1024n
+  assert.equal(s3PartSize(1n), S3_DEFAULT_PART_BYTES)
+  assert.equal(s3PartSize(640_000n * MiB), S3_DEFAULT_PART_BYTES)
+  const huge = 1024n * 1024n * MiB   // 1 TiB
+  const part = s3PartSize(huge)
+  assert.equal(part % (1024 * 1024), 0)
+  assert.ok(s3PartCount(huge, part) <= 10_000)
+  assert.equal(s3PartCount(100n * MiB, S3_DEFAULT_PART_BYTES), 2)
+  assert.equal(s3PartCount(64n * MiB, S3_DEFAULT_PART_BYTES), 1)
+})
+
+test('completedPartsInOrder wants every part once, with an ETag', () => {
+  assert.deepEqual(completedPartsInOrder([{ partNumber: 2, etag: 'b' }, { partNumber: 1, etag: 'a' }], 2).map((p) => p.partNumber), [1, 2])
+  assert.equal(completedPartsInOrder([{ partNumber: 1, etag: 'a' }], 2), null)
+  assert.equal(completedPartsInOrder([{ partNumber: 1, etag: 'a' }, { partNumber: 1, etag: 'a' }], 2), null)
+  assert.equal(completedPartsInOrder([{ partNumber: 1, etag: '' }], 1), null)
+})
+
+test('oauthReturnUrl sends desktop flows back through ninedrive:// links', () => {
+  assert.equal(oauthReturnUrl('https://drive.example', 'desktop', 'google-auth', { token: 'abc' }), 'ninedrive://google-auth?token=abc')
+  assert.match(oauthReturnUrl('https://drive.example', 'web', 'google-connected', { status: 'success' }), /^https:\/\/drive\.example\/google-connected\?status=success$/)
+})

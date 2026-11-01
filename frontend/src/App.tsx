@@ -17,12 +17,22 @@ import { ApiManagementPage } from '@/pages/ApiManagementPage'
 import { TrashPage } from '@/pages/TrashPage'
 import { ActivityLogPage } from '@/pages/ActivityLogPage'
 import { UploadProvider } from '@/context/UploadContext'
+import { ServerSetupPage } from '@/pages/ServerSetupPage'
+import { DesktopBridge } from '@/components/desktop/DesktopBridge'
+import { getServerUrl, isDesktop } from '@/lib/runtime'
+import { useState } from 'react'
 
 
 function App() {
+  const [, setServerSaved] = useState(0)
+  // Desktop: nothing works until the app knows which server to talk to.
+  if (isDesktop && !getServerUrl()) return <ServerSetupPage onSaved={() => setServerSaved((n) => n + 1)} />
+
   return (
     <UploadProvider>
+      {isDesktop ? <DesktopBridge /> : null}
       <Routes>
+      {isDesktop ? <Route path="server" element={<ServerSetupPage />} /> : null}
       <Route path="login" element={<LoginPage />} />
       <Route path="register" element={<RegisterPage />} />
       <Route path="google-auth" element={<GoogleAuthPage />} />

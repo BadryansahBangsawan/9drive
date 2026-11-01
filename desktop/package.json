@@ -1,0 +1,14 @@
+{
+  "name": "9drive-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "9Drive desktop app (Tauri): the web UI plus native uploads and downloads.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
