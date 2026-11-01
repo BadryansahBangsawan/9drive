@@ -116,16 +116,32 @@ authRouter.get('/google/callback', async (req, res) => {
   }
 })
 
-authRouter.post('/google/exchange', tokenLimiter, async (req, res, next) => {
+// Trades a one-time handoff token (Google sign-in, or the website signing in the desktop app) for a
+// session. Exposed as /handoff/exchange; /google/exchange is the original name.
+async function exchangeHandoff(req: AuthRequest, res: import('express').Response, next: import('express').NextFunction) {
   try {
     const body = googleExchangeSchema.parse(req.body)
     const handoff = await prisma.authHandoff.findFirst({ where: { tokenHash: hashToken(body.token), usedAt: null, expiresAt: { gt: new Date() } }, include: { user: true } })
-    if (!handoff) return res.status(401).json({ code: 'AUTH_GOOGLE_HANDOFF_INVALID', message: 'Google login session expired.' })
+    if (!handoff) return res.status(401).json({ code: 'AUTH_HANDOFF_INVALID', message: 'This sign-in link expired. Sign in again.' })
     // Claim the token atomically so two concurrent exchanges cannot both create a session.
     const claimed = await prisma.authHandoff.updateMany({ where: { id: handoff.id, usedAt: null }, data: { usedAt: new Date() } })
-    if (claimed.count === 0) return res.status(401).json({ code: 'AUTH_GOOGLE_HANDOFF_INVALID', message: 'Google login session expired.' })
+    if (claimed.count === 0) return res.status(401).json({ code: 'AUTH_HANDOFF_INVALID', message: 'This sign-in link expired. Sign in again.' })
     const tokens = await createSession(handoff.userId, req)
     return res.json({ ...tokens, user: publicUser(handoff.user) })
+  } catch (error) {
+    return next(error)
+  }
+}
+authRouter.post('/google/exchange', tokenLimiter, exchangeHandoff)
+authRouter.post('/handoff/exchange', tokenLimiter, exchangeHandoff)
+
+// The website signs the desktop app in: a user signed in on the web asks for a one-time token
+// (5 minutes), which the app exchanges for its own session through a ninedrive:// link.
+authRouter.post('/desktop-handoff', tokenLimiter, requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const token = randomToken()
+    await prisma.authHandoff.create({ data: { userId: req.user!.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 5 * 60_000) } })
+    return res.status(201).json({ token })
   } catch (error) {
     return next(error)
   }

@@ -19,8 +19,8 @@ export function DesktopReturnPage() {
   const page = link ? new URL(link).host : ''
   const failed = !link || params?.get('status') === 'error'
   const title = failed
-    ? (page === 'google-connected' ? 'Connecting the account failed' : 'Google sign-in failed')
-    : (page === 'google-connected' ? 'Google Drive connected' : 'You’re signed in')
+    ? (page === 'google-connected' ? 'Connecting the account failed' : 'Sign-in failed')
+    : (page === 'google-connected' ? 'Google Drive connected' : 'The 9Drive app is signed in')
 
   useEffect(() => {
     if (!link) return

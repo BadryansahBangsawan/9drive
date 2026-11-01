@@ -19,6 +19,9 @@ import { ActivityLogPage } from '@/pages/ActivityLogPage'
 import { UploadProvider } from '@/context/UploadContext'
 import { ServerSetupPage } from '@/pages/ServerSetupPage'
 import { DesktopReturnPage } from '@/pages/DesktopReturnPage'
+import { DesktopAuthPage } from '@/pages/DesktopAuthPage'
+import { DesktopLoginPage } from '@/pages/DesktopLoginPage'
+import { DownloadAppPage } from '@/pages/DownloadAppPage'
 import { DesktopBridge } from '@/components/desktop/DesktopBridge'
 import { getServerUrl, isDesktop } from '@/lib/runtime'
 import { useState } from 'react'
@@ -34,14 +37,17 @@ function App() {
       {isDesktop ? <DesktopBridge /> : null}
       <Routes>
       {isDesktop ? <Route path="server" element={<ServerSetupPage />} /> : null}
-      <Route path="login" element={<LoginPage />} />
-      <Route path="register" element={<RegisterPage />} />
+      {/* The desktop app signs in on the website (DesktopLoginPage → /desktop-auth). */}
+      <Route path="login" element={isDesktop ? <DesktopLoginPage /> : <LoginPage />} />
+      <Route path="register" element={isDesktop ? <DesktopLoginPage register /> : <RegisterPage />} />
+      {!isDesktop ? <Route path="download" element={<DownloadAppPage />} /> : null}
       <Route path="google-auth" element={<GoogleAuthPage />} />
       <Route path="google-connected" element={<GoogleConnectedPage />} />
       <Route path="desktop-return" element={<DesktopReturnPage />} />
       <Route path="public/files/:token" element={<PublicFilePage />} />
       <Route path="public/files/:token/embed" element={<PublicFilePage embed />} />
       <Route element={<ProtectedRoute />}>
+        {!isDesktop ? <Route path="desktop-auth" element={<DesktopAuthPage />} /> : null}
         <Route element={<DriveLayout />}>
           <Route index element={<Navigate to="/all-files" replace />} />
           <Route path="all-files" element={<AllFilesPage />} />

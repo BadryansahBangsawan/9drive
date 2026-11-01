@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getApiUrl } from '@/lib/api'
 import { getAccessToken, getRefreshToken, onAuthChange, setAccessToken } from '@/lib/auth'
 import { ask, invoke, listen, offerUpdate, onDeepLink, uploader } from '@/lib/desktop'
+import { acceptDesktopSignIn } from '@/lib/desktop-auth'
 
 // Desktop only (rendered by App inside the router). Connects the React app to the native side:
 // - hands the session tokens to the native uploader, and takes back tokens it refreshed;
@@ -51,7 +52,11 @@ export function DesktopBridge() {
           try { url = new URL(raw) } catch { continue }
           // ninedrive://google-auth?token=… → the web app's handoff page; ninedrive://google-connected?status=…
           const page = url.host || url.pathname.replace(/^\/+/, '')
-          if (page === 'google-auth') navigateRef.current(`/google-auth${url.search}`)
+          if (page === 'auth') {
+            // Signed in on the website: only for the sign-in this app started (matching state).
+            if (acceptDesktopSignIn(url.searchParams.get('state'))) navigateRef.current(`/google-auth?token=${encodeURIComponent(url.searchParams.get('token') ?? '')}`)
+            else console.warn('Ignored a sign-in link this app did not ask for')
+          } else if (page === 'google-auth') navigateRef.current(`/google-auth${url.search}`)
           else if (page === 'google-connected') {
             window.dispatchEvent(new CustomEvent('9drive:google-connected', { detail: url.searchParams.get('status') ?? 'error' }))
             navigateRef.current('/quota')
