@@ -19,7 +19,7 @@ import { SelectionBar } from '@/components/drive/SelectionBar'
 import { ShareDialog } from '@/components/drive/ShareDialog'
 import { getApiUrl, getWebUrl, apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { isDesktop } from '@/lib/runtime'
-import { chooseSavePath, downloadToFile } from '@/lib/desktop'
+import { chooseSavePath, downloadToFile, type DownloadEvent } from '@/lib/desktop'
 import { accountLabel as formatAccountLabel, type ConnectedAccount } from '@/lib/accounts'
 import { getAccessToken } from '@/lib/auth'
 import { createPlyr, ensurePlyr } from '@/lib/plyr'
@@ -29,7 +29,7 @@ import type { FileItem, FolderItem } from '@/types/drive'
 import { FolderPicker } from '@/components/drive/FolderPicker'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 
-type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccount?: { id: string; email: string; provider: string; displayName?: string | null }; folder?: { id: string; name: string } | null }
+type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccount?: { id: string; email: string; provider: string; displayName?: string | null }; folder?: { id: string; name: string } | null; thumbnailPath?: string | null }
 type BackendFolder = { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; source?: string; updatedAt: string }
 
 type FileViewMode = 'list' | 'grid'
@@ -86,6 +86,7 @@ function mapFile(file: BackendFile): FileItem {
     kind: mimeToKind(file.mimeType),
     folderId: file.folderId,
     folderName: file.folder?.name,
+    thumbnailUrl: file.thumbnailPath ? `${getApiUrl()}${file.thumbnailPath}` : undefined,
   }
 }
 
@@ -516,15 +517,31 @@ export function AllFilesPage() {
     }
   }
 
+  // Desktop download progress in the message bar: "Downloading x.zip · 3.2 GB of 9.8 GB · 33% · 24 MB/s".
+  function downloadProgress(name: string) {
+    const startedAt = Date.now()
+    let firstReceived: number | null = null
+    return (event: DownloadEvent) => {
+      if (event.status !== 'downloading') return
+      firstReceived ??= event.received
+      const seconds = (Date.now() - startedAt) / 1000
+      const speed = seconds > 1 ? (event.received - firstReceived) / seconds : 0
+      const parts = [`Downloading ${name}`]
+      parts.push(event.total ? `${formatBytes(event.received)} of ${formatBytes(event.total)} · ${Math.floor((event.received / event.total) * 100)}%` : formatBytes(event.received))
+      if (speed > 0) parts.push(`${formatBytes(speed)}/s`)
+      setMessage(parts.join(' · '))
+    }
+  }
+
   async function downloadFile(file: FileItem | null) {
     if (!file?.id) return
     if (isDesktop) {
       // Streamed straight to disk by the native side, so large files never sit in memory.
       const dest = await chooseSavePath(file.name)
       if (!dest) return
-      flash(`Downloading ${file.name}…`)
+      setMessage(`Downloading ${file.name}…`)
       try {
-        await downloadToFile({ path: `/files/${file.id}/download`, dest })
+        await downloadToFile({ path: `/files/${file.id}/download`, dest }, downloadProgress(file.name))
         flash(`Saved ${file.name}.`)
       } catch (error) {
         flash(error instanceof Error ? error.message : 'Download failed')
@@ -552,9 +569,9 @@ export function AllFilesPage() {
     if (isDesktop) {
       const dest = await chooseSavePath('9drive-download.zip')
       if (!dest) return
-      flash(`Downloading ${selectedIds.length} files as a ZIP…`)
+      setMessage(`Downloading ${selectedIds.length} files as a ZIP…`)
       try {
-        await downloadToFile({ path: '/files/batch-download', dest, method: 'POST', body: { fileIds: selectedIds } })
+        await downloadToFile({ path: '/files/batch-download', dest, method: 'POST', body: { fileIds: selectedIds } }, downloadProgress('9drive-download.zip'))
         clearSelection()
         flash('Batch download complete.')
       } catch (error) {

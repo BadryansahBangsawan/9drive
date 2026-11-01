@@ -56,3 +56,31 @@ test('oauthReturnUrl sends desktop flows to /desktop-return with the ninedrive:/
   assert.equal(oauthReturnUrl('https://drive.example', 'desktop', 'google-auth', { token: 'abc' }), `https://drive.example/desktop-return#${encodeURIComponent('ninedrive://google-auth?token=abc')}`)
   assert.match(oauthReturnUrl('https://drive.example', 'web', 'google-connected', { status: 'success' }), /^https:\/\/drive\.example\/google-connected\?status=success$/)
 })
+
+import { thumbnailExpiry, thumbnailPath, thumbnailSignature, verifyThumbnailSignature, mayHaveThumbnail } from '../dist/utils/thumbnail.js'
+
+test('thumbnail URLs are signed, stable within a window, and expire', () => {
+  const now = Date.UTC(2026, 10, 1, 7, 0, 0)
+  const exp = thumbnailExpiry(now)
+  assert.equal(thumbnailExpiry(now + 60_000), exp, 'same URL for a while, so browsers can cache it')
+  assert.ok(exp > now)
+  const sig = thumbnailSignature('secret', 'file-1', exp)
+  assert.ok(verifyThumbnailSignature('secret', 'file-1', exp, sig, now))
+  assert.equal(verifyThumbnailSignature('secret', 'file-2', exp, sig, now), false, 'bound to the file')
+  assert.equal(verifyThumbnailSignature('other', 'file-1', exp, sig, now), false, 'bound to the key')
+  assert.equal(verifyThumbnailSignature('secret', 'file-1', exp, sig, exp + 1), false, 'expires')
+  assert.equal(verifyThumbnailSignature('secret', 'file-1', exp, 'zz', now), false)
+})
+
+test('mayHaveThumbnail: Drive renders documents and media, S3 only small images', () => {
+  const file = (provider, mimeType, sizeBytes = 10n) => ({ id: 'f', provider, mimeType, sizeBytes })
+  assert.ok(mayHaveThumbnail(file('google_drive', 'video/mp4')))
+  assert.ok(mayHaveThumbnail(file('google_drive', 'application/vnd.google-apps.document')))
+  assert.ok(mayHaveThumbnail(file('google_drive', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')))
+  assert.equal(mayHaveThumbnail(file('google_drive', 'application/zip')), false)
+  assert.ok(mayHaveThumbnail(file('s3', 'image/png')))
+  assert.equal(mayHaveThumbnail(file('s3', 'image/png', 100n * 1024n * 1024n)), false)
+  assert.equal(mayHaveThumbnail(file('s3', 'video/mp4')), false)
+  assert.equal(thumbnailPath('k', file('s3', 'application/zip')), null)
+  assert.match(thumbnailPath('k', file('google_drive', 'image/jpeg')), /^\/files\/thumbnail\/f\?exp=\d+&sig=[0-9a-f]{64}$/)
+})

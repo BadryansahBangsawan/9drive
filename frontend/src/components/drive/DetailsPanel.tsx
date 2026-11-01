@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
-import { FileIcon } from '@/components/drive/FileIcon'
+import { FileThumbnail } from '@/components/drive/FileThumbnail'
 import { StoredIn } from '@/components/drive/StoredIn'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
@@ -71,8 +71,8 @@ export function DetailsPanel({
 
   const body = (
     <div className="grid min-w-0 gap-4 p-4">
-      <div className="flex h-40 items-center justify-center rounded-lg bg-surface" aria-hidden="true">
-        <FileIcon kind={file.kind} className="h-10 w-10" />
+      <div className="relative flex h-40 items-center justify-center overflow-hidden rounded-lg bg-surface" aria-hidden="true">
+        <FileThumbnail key={file.thumbnailUrl ?? file.id} file={file} iconClassName="h-10 w-10" fit="contain" />
       </div>
       <div className="min-w-0">
         <h3 className="line-clamp-3 break-words text-[15px] font-semibold leading-snug text-text" title={file.name}>{file.name}</h3>

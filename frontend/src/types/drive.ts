@@ -25,4 +25,6 @@ export type FileItem = {
   kind: 'doc' | 'image' | 'video' | 'pdf'
   folderId?: string | null
   folderName?: string | null
+  // Signed thumbnail URL, when the storage can render one (Drive media/documents, small S3 images).
+  thumbnailUrl?: string
 }

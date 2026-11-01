@@ -16,6 +16,13 @@ import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
 import { ZipArchive } from 'archiver'
 import { createAuditLog } from '../../utils/audit.js'
+import { env } from '../../config/env.js'
+import { mayHaveThumbnail, thumbnailPath, verifyThumbnailSignature } from '../../utils/thumbnail.js'
+import { pipeToResponse, setFileResponseHeaders } from './file-response.js'
+
+// Thumbnail signatures use a key derived from the JWT secret, so they can't be confused with tokens.
+const thumbnailSecret = `${env.JWT_ACCESS_SECRET}:thumbnails`
+const THUMBNAIL_CACHE = 'private, max-age=21600'
 
 
 
@@ -33,6 +40,43 @@ fileRouter.get('/preview/:token', async (req, res, next) => {
     })
     if (!preview || preview.file.status !== 'active') return res.status(404).json({ code: 'PREVIEW_NOT_FOUND', message: 'Preview token not found.' })
     return streamProviderFile(preview.file, req.headers.range, res, { disposition: 'inline' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// A file's thumbnail for <img src> (signed URL from the file list; no bearer token). Google Drive
+// renders it (thumbnailLink, fetched with the account's token); small S3 images are sent as they are.
+fileRouter.get('/thumbnail/:id', async (req, res, next) => {
+  try {
+    const fileId = String(req.params.id)
+    const query = z.object({ exp: z.coerce.number(), sig: z.string() }).safeParse(req.query)
+    const notFound = () => res.status(404).json({ code: 'THUMBNAIL_NOT_FOUND', message: 'No thumbnail.' })
+    if (!query.success || !verifyThumbnailSignature(thumbnailSecret, fileId, query.data.exp, query.data.sig)) return notFound()
+    const file = await prisma.file.findFirst({ where: { id: fileId, status: 'active' }, include: { connectedAccount: true } })
+    if (!file || !mayHaveThumbnail(file)) return notFound()
+
+    if (file.provider === 's3') {
+      const config = await getS3ConfigForAccount(file.connectedAccountId)
+      const object = await createS3Client(config).send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId }))
+      if (!object.Body) return notFound()
+      setFileResponseHeaders(res, { mimeType: file.mimeType, fileName: file.name, disposition: 'inline' })
+      res.setHeader('Cache-Control', THUMBNAIL_CACHE)
+      if (object.ContentLength !== undefined) res.setHeader('Content-Length', String(object.ContentLength))
+      return pipeToResponse(object.Body as Readable, res)
+    }
+
+    const auth = await getAuthedGoogleClient(file.connectedAccount)
+    const metadata = await google.drive({ version: 'v3', auth }).files.get({ fileId: file.providerFileId, fields: 'thumbnailLink' }).catch(() => null)
+    const link = metadata?.data.thumbnailLink
+    if (!link) return notFound()
+    // thumbnailLink ends in =s220 (220 px); ask for a size that stays sharp on a 2x screen.
+    const response = await fetch(link.replace(/=s\d+$/, '=s480'), { headers: normalizeHeaders(await auth.getRequestHeaders()) })
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!response.ok || !response.body || !contentType.startsWith('image/')) return notFound()
+    setFileResponseHeaders(res, { mimeType: contentType, fileName: 'thumbnail', disposition: 'inline' })
+    res.setHeader('Cache-Control', THUMBNAIL_CACHE)
+    return pipeToResponse(response.body as unknown as Parameters<typeof pipeToResponse>[0], res)
   } catch (error) {
     return next(error)
   }
@@ -95,7 +139,7 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
     })
     // An imported My Drive can hold hundreds of thousands of files: never return them all at once.
     const cap = query.limit ?? FILE_LIST_CAP
-    return res.json({ files: files.slice(0, cap).map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString() })), hasMore: files.length > cap })
+    return res.json({ files: files.slice(0, cap).map((file) => ({ ...file, sizeBytes: file.sizeBytes.toString(), thumbnailPath: thumbnailPath(thumbnailSecret, file) })), hasMore: files.length > cap })
   } catch (error) {
     return next(error)
   }

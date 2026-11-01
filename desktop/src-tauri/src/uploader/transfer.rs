@@ -21,6 +21,7 @@ use tokio_util::io::ReaderStream;
 /// Google needs multiples of 256 KiB; 64 MiB keeps requests few without making a lost chunk costly.
 const GOOGLE_CHUNK: u64 = 64 * 1024 * 1024;
 const S3_URL_BATCH: usize = 20;
+const S3_PARALLEL: usize = 4;
 
 pub async fn upload(uploader: &Uploader, id: &str) -> Result<(), Failure> {
     let item = uploader.item(id).ok_or_else(|| Failure::Fatal("Upload not found".into()))?;
@@ -83,16 +84,16 @@ async fn init(uploader: &Uploader, item: &Item) -> Result<(Session, Option<Strin
     Ok((session, init.account_label))
 }
 
-/// `len` bytes of the file from `start`, streamed from disk. Reports `base + bytes read` as progress.
-async fn file_body(uploader: &Uploader, item: &Item, start: u64, len: u64, base: u64) -> Result<Body, Failure> {
+/// `len` bytes of the file from `start`, streamed from disk. Every chunk read is added to `sent`,
+/// whose value is reported as the upload's progress (shared by parts sent in parallel).
+async fn file_body(uploader: &Uploader, item: &Item, start: u64, len: u64, sent: Arc<AtomicU64>) -> Result<Body, Failure> {
     let mut file = tokio::fs::File::open(&item.path).await.map_err(|e| Failure::Fatal(format!("Can't read the file: {e}")))?;
     file.seek(SeekFrom::Start(start)).await.map_err(|e| Failure::Fatal(format!("Can't read the file: {e}")))?;
-    let sent = Arc::new(AtomicU64::new(0));
     let (uploader, id) = (uploader.clone(), item.id.clone());
     let stream = ReaderStream::with_capacity(file.take(len), 256 * 1024).map(move |chunk| {
         if let Ok(bytes) = &chunk {
             let total = sent.fetch_add(bytes.len() as u64, Ordering::Relaxed) + bytes.len() as u64;
-            uploader.progress(&id, base + total);
+            uploader.progress(&id, total);
         }
         chunk
     });
@@ -131,7 +132,7 @@ async fn google(uploader: &Uploader, item: &Item, session_id: &str, url: &str) -
     while let Some(start) = offset {
         uploader.progress(&item.id, start);
         let len = GOOGLE_CHUNK.min(item.size - start);
-        let body = file_body(uploader, item, start, len, start).await?;
+        let body = file_body(uploader, item, start, len, Arc::new(AtomicU64::new(start))).await?;
         let response = uploader
             .api()
             .http()
@@ -192,8 +193,10 @@ async fn s3(uploader: &Uploader, item: &Item, session_id: &str, part_size: u64, 
         .filter(|p| p.part_number >= 1 && p.part_number <= part_count && p.size == part_len(item.size, part_size, p.part_number))
         .map(|p| (p.part_number, p.etag))
         .collect();
-    let mut uploaded: u64 = done.keys().map(|&n| part_len(item.size, part_size, n)).sum();
+    let uploaded: u64 = done.keys().map(|&n| part_len(item.size, part_size, n)).sum();
     uploader.progress(&item.id, uploaded);
+    // Bytes read for parts so far; parts go S3_PARALLEL at a time, so this is shared.
+    let sent = Arc::new(AtomicU64::new(uploaded));
 
     let missing: Vec<u32> = (1..=part_count).filter(|n| !done.contains_key(n)).collect();
     for batch in missing.chunks(S3_URL_BATCH) {
@@ -208,27 +211,43 @@ async fn s3(uploader: &Uploader, item: &Item, session_id: &str, part_size: u64, 
             urls: Vec<PartUrl>,
         }
         let urls: Urls = api.json(Method::POST, &format!("/uploads/s3/{session_id}/part-urls"), Some(json!({ "partNumbers": batch }))).await?;
-        for part in urls.urls {
-            let start = (part.part_number as u64 - 1) * part_size;
-            let len = part_len(item.size, part_size, part.part_number);
-            let body = file_body(uploader, item, start, len, uploaded).await?;
-            let response = api.http().put(&part.url).header(CONTENT_LENGTH, len).body(body).send().await.map_err(network_failure)?;
-            let status = response.status().as_u16();
-            match status {
-                200..=299 => {
-                    let etag = response.headers().get(ETAG).and_then(|v| v.to_str().ok()).map(str::to_string);
-                    let Some(etag) = etag else {
-                        return Err(Failure::Fatal("The bucket did not confirm the part (no ETag).".into()));
-                    };
-                    done.insert(part.part_number, etag);
-                    uploaded += len;
-                    uploader.progress(&item.id, uploaded);
+        // Up to S3_PARALLEL parts at once: one connection rarely fills the uplink to a bucket.
+        let results: Vec<Result<(u32, String), Failure>> = futures_util::stream::iter(urls.urls)
+            .map(|part| {
+                let sent = sent.clone();
+                async move {
+                    let start = (part.part_number as u64 - 1) * part_size;
+                    let len = part_len(item.size, part_size, part.part_number);
+                    let body = file_body(uploader, item, start, len, sent).await?;
+                    let response = api.http().put(&part.url).header(CONTENT_LENGTH, len).body(body).send().await.map_err(network_failure)?;
+                    let status = response.status().as_u16();
+                    match status {
+                        200..=299 => match response.headers().get(ETAG).and_then(|v| v.to_str().ok()) {
+                            Some(etag) => Ok((part.part_number, etag.to_string())),
+                            None => Err(Failure::Fatal("The bucket did not confirm the part (no ETag).".into())),
+                        },
+                        403 => Err(Failure::Retry("The upload link expired; getting a new one".into())),
+                        404 => Err(Failure::Restart("The upload was aborted; starting again".into())),
+                        429 | 500..=599 => Err(Failure::Retry(format!("The bucket is busy ({status})"))),
+                        _ => Err(Failure::Fatal(format!("The bucket refused the upload ({status})"))),
+                    }
                 }
-                403 => return Err(Failure::Retry("The upload link expired; getting a new one".into())),
-                404 => return Err(Failure::Restart("The upload was aborted; starting again".into())),
-                429 | 500..=599 => return Err(Failure::Retry(format!("The bucket is busy ({status})"))),
-                _ => return Err(Failure::Fatal(format!("The bucket refused the upload ({status})"))),
+            })
+            .buffer_unordered(S3_PARALLEL)
+            .collect()
+            .await;
+        // Keep the parts that made it (S3 has them; the next attempt skips them), then report a failure.
+        let mut failure = None;
+        for result in results {
+            match result {
+                Ok((number, etag)) => {
+                    done.insert(number, etag);
+                }
+                Err(error) => failure = Some(failure.unwrap_or(error)),
             }
+        }
+        if let Some(failure) = failure {
+            return Err(failure);
         }
     }
 

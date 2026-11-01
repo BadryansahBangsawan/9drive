@@ -1,6 +1,6 @@
 import { MoreVertical } from 'lucide-react'
 import type { KeyboardEvent, MouseEvent } from 'react'
-import { FileIcon } from '@/components/drive/FileIcon'
+import { FileThumbnail } from '@/components/drive/FileThumbnail'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/utils'
 import type { FileItem } from '@/types/drive'
@@ -51,16 +51,16 @@ export function FileGrid({
               selected ? 'border-accent' : 'border-border hover:bg-hover',
             )}
           >
-            <div className={cn('relative flex h-[120px] items-center justify-center rounded-md', selected ? 'bg-accent-soft' : 'bg-surface')}>
-              <FileIcon kind={file.kind} className="h-8 w-8" />
+            <div className={cn('relative flex h-[120px] items-center justify-center overflow-hidden rounded-md', selected ? 'bg-accent-soft' : 'bg-surface')}>
+              <FileThumbnail key={file.thumbnailUrl ?? file.id} file={file} iconClassName="h-8 w-8" />
               {onToggleFile ? (
-                <span className={cn('absolute left-2 top-2 [@media(hover:none)]:opacity-100', anySelected || checked ? 'opacity-100' : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100')}>
+                <span className={cn('absolute left-2 top-2 z-10 [@media(hover:none)]:opacity-100', anySelected || checked ? 'opacity-100' : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100')}>
                   <Checkbox checked={checked} onChange={() => onToggleFile(file)} aria-label={`Select ${file.name}`} />
                 </span>
               ) : null}
               <button
                 type="button"
-                className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-selected hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                className="absolute right-1.5 top-1.5 z-10 flex h-7 w-7 bg-bg/80 items-center justify-center rounded-md text-muted transition-colors hover:bg-selected hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 onClick={(event) => { event.stopPropagation(); onFileContextMenu?.(event, file) }}
                 aria-label={`Open ${file.name} menu`}
                 aria-haspopup="menu"
