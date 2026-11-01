@@ -63,6 +63,9 @@ pub struct Item {
     pub error: Option<String>,
     pub account_label: Option<String>,
     pub session: Option<Session>,
+    /// Bytes per second while uploading (smoothed); not saved.
+    #[serde(skip)]
+    pub speed: u64,
 }
 
 /// What the web side sees of an item.
@@ -76,6 +79,7 @@ pub struct View {
     status: Status,
     error: Option<String>,
     account_label: Option<String>,
+    speed: u64,
 }
 
 impl From<&Item> for View {
@@ -88,8 +92,16 @@ impl From<&Item> for View {
             status: item.status,
             error: item.error.clone(),
             account_label: item.account_label.clone(),
+            speed: if item.status == Status::Uploading { item.speed } else { 0 },
         }
     }
+}
+
+/// Upload speed over ~1 s windows, smoothed so the number doesn't jump around.
+struct Rate {
+    since: Instant,
+    bytes: u64,
+    bps: f64,
 }
 
 #[derive(Default)]
@@ -97,6 +109,7 @@ struct Queue {
     items: Vec<Item>,
     running: HashMap<String, CancellationToken>,
     last_progress: HashMap<String, Instant>,
+    rates: HashMap<String, Rate>,
 }
 
 #[derive(Clone)]
@@ -258,9 +271,15 @@ impl Uploader {
     }
 
     fn set_status(&self, id: &str, status: Status, error: Option<String>) {
+        if status != Status::Uploading {
+            self.inner.queue.lock().unwrap().rates.remove(id);
+        }
         self.update(id, |item| {
             item.status = status;
             item.error = error;
+            if status != Status::Uploading {
+                item.speed = 0;
+            }
         });
     }
 
@@ -270,8 +289,22 @@ impl Uploader {
             let mut queue = self.inner.queue.lock().unwrap();
             let now = Instant::now();
             let due = queue.last_progress.get(id).map_or(true, |last| now.duration_since(*last) >= PROGRESS_EVERY);
+            let uploaded = uploaded.min(queue.items.iter().find(|i| i.id == id).map_or(0, |i| i.size));
+            let rate = queue.rates.entry(id.to_string()).or_insert(Rate { since: now, bytes: uploaded, bps: 0.0 });
+            let elapsed = now.duration_since(rate.since).as_secs_f64();
+            if uploaded < rate.bytes {
+                // Went back (a retry resumes from what the destination has): restart the window.
+                *rate = Rate { since: now, bytes: uploaded, bps: rate.bps };
+            } else if elapsed >= 1.0 {
+                let current = (uploaded - rate.bytes) as f64 / elapsed;
+                rate.bps = if rate.bps == 0.0 { current } else { rate.bps * 0.7 + current * 0.3 };
+                rate.since = now;
+                rate.bytes = uploaded;
+            }
+            let speed = rate.bps as u64;
             let Some(item) = queue.items.iter_mut().find(|i| i.id == id) else { return };
-            item.uploaded = uploaded.min(item.size);
+            item.uploaded = uploaded;
+            item.speed = speed;
             if !due {
                 return;
             }
@@ -322,6 +355,7 @@ fn new_item(path: &Path, folder_id: Option<String>, target_account_id: Option<St
         error: None,
         account_label: None,
         session: None,
+        speed: 0,
     })
 }
 
@@ -431,6 +465,7 @@ mod tests {
             error: Some("No connection".into()),
             account_label: None,
             session: Some(Session::S3 { session_id: "s".into(), part_size: 64, part_count: 1 }),
+            speed: 9,
         };
         let json = serde_json::to_string(&vec![item]).unwrap();
         assert!(json.contains("\"kind\":\"s3\"") && json.contains("\"partSize\":64") && json.contains("\"status\":\"waiting\""));

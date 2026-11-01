@@ -18,6 +18,8 @@ function toProgressFile(item: NativeUpload): UploadProgressFile {
     percent: item.status === 'done' ? 100 : Math.min(99, percent),
     status: statusMap[item.status],
     accountLabel: item.accountLabel ?? undefined,
+    uploaded: item.uploaded,
+    speed: item.status === 'uploading' ? item.speed ?? 0 : 0,
     error: item.status === 'cancelled' ? 'Cancelled' : item.error ?? undefined,
     detail: item.status === 'waiting' ? (item.error ? `Waiting to retry · ${item.error}` : 'Waiting for the connection') : undefined,
   }

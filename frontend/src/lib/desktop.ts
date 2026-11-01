@@ -11,6 +11,8 @@ export type NativeUpload = {
   status: NativeUploadStatus
   error?: string | null
   accountLabel?: string | null
+  /** Bytes per second while uploading. */
+  speed?: number
 }
 export type PickedFile = { path: string; name: string; size: number }
 export type DownloadEvent = { id: string; received: number; total: number | null; status: 'downloading' | 'done' | 'error' | 'cancelled'; error?: string | null }

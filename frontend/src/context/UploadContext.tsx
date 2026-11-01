@@ -6,7 +6,7 @@ import { clearAuthSession, getAccessToken } from '@/lib/auth'
 
 export type UploadProgressStatus = 'queued' | 'uploading' | 'paused' | 'done' | 'error' | 'partial'
 // `detail` is a short note shown under an active upload (e.g. waiting for the connection).
-export type UploadProgressFile = { id: string; name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string; error?: string; detail?: string }
+export type UploadProgressFile = { id: string; name: string; size: number; percent: number; status: UploadProgressStatus; accountLabel?: string; error?: string; detail?: string; uploaded?: number; speed?: number }
 export type UploadProgressState = { open: boolean; fileName: string; percent: number; status: UploadProgressStatus; files: UploadProgressFile[] }
 
 type ResumableSession = { sessionId: string; file: File; folderId?: string | null; targetAccountId?: string | null }

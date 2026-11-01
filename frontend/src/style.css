@@ -68,6 +68,19 @@
     -webkit-text-size-adjust: 100%;
   }
 
+  /* Desktop app: the window never scrolls as a whole (WebKit would shift the entire UI up under the
+     title bar). The app fills the window and #root scrolls pages taller than it (sign-in forms). */
+  html.desktop-app,
+  html.desktop-app body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  html.desktop-app #root {
+    height: 100%;
+    overflow: auto;
+  }
+
   body {
     margin: 0;
     background: var(--bg);

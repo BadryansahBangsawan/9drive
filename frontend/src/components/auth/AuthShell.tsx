@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { LogoMark } from '@/components/brand/Logo'
+import { isDesktop } from '@/lib/runtime'
 
 export function AuthLogo() {
   return <LogoMark variant="full" className="h-12 w-auto" />
@@ -7,7 +8,7 @@ export function AuthLogo() {
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-surface p-5">
+    <main className={`flex ${isDesktop ? 'min-h-full' : 'min-h-screen'} items-center justify-center bg-surface p-5`}>
       <div className="w-full max-w-[400px] rounded-xl border border-border bg-bg p-7 shadow-[0_12px_32px_rgba(0,0,0,0.12),0_2px_6px_rgba(0,0,0,0.06)]">{children}</div>
     </main>
   )

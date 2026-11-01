@@ -5,6 +5,28 @@ import { formatBytes } from '@/lib/api'
 import { useUpload } from '@/context/UploadContext'
 import { cn } from '@/lib/utils'
 
+// "12 min left", "2 h 5 min left"; nothing until the speed is known.
+function timeLeft(bytesLeft: number, speed: number) {
+  if (!speed || bytesLeft <= 0) return ''
+  const seconds = Math.round(bytesLeft / speed)
+  if (seconds < 60) return 'less than a minute left'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min left`
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min left`
+}
+
+// "3.2 GB of 28.76 GB · 11%" when the uploader reports bytes (desktop), else size and account.
+function progressLine(file: { size: number; percent: number; uploaded?: number; accountLabel?: string }) {
+  if (file.uploaded === undefined) return `${formatBytes(file.size)}${file.accountLabel ? ` · to ${file.accountLabel}` : ''}`
+  return `${formatBytes(file.uploaded)} of ${formatBytes(file.size)} · ${file.percent}%`
+}
+
+// "11.4 MB/s · 42 min left".
+function speedLine(file: { size: number; uploaded?: number; speed?: number }) {
+  if (!file.speed || file.uploaded === undefined) return 'Measuring speed…'
+  return [`${formatBytes(file.speed)}/s`, timeLeft(file.size - file.uploaded, file.speed)].filter(Boolean).join(' · ')
+}
+
 export function UploadPanel() {
   const { uploadProgress, setUploadProgress, retryFailedUpload, pauseUpload, resumeUpload, cancelUpload } = useUpload()
   const [collapsed, setCollapsed] = useState(false)
@@ -55,8 +77,14 @@ export function UploadPanel() {
                     <p className="truncate text-xs tabular-nums text-muted" title={file.detail}>
                       {file.status === 'paused'
                         ? `Paused · ${file.percent}% of ${formatBytes(file.size)}`
-                        : file.detail ?? `${formatBytes(file.size)}${file.accountLabel ? ` · to ${file.accountLabel}` : ''}`}
+                        : file.detail ?? progressLine(file)}
                     </p>
+                    {file.status === 'uploading' && file.uploaded !== undefined && !file.detail ? (
+                      <>
+                        <p className="truncate text-xs tabular-nums text-muted">{speedLine(file)}</p>
+                        {file.accountLabel ? <p className="truncate text-xs text-subtle" title={file.accountLabel}>to {file.accountLabel}</p> : null}
+                      </>
+                    ) : null}
                     <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-hover">
                       <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${file.percent}%` }} />
                     </div>

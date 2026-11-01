@@ -9,6 +9,7 @@ import { Sidebar } from './shell/Sidebar'
 import { Topbar, type BreadcrumbItem } from './shell/Topbar'
 import { UploadDialog } from '@/components/drive/UploadDialog'
 import { UploadPanel } from './shell/UploadPanel'
+import { isDesktop } from '@/lib/runtime'
 
 export type DriveLayoutContext = {
   setHeaderActions: (actions: ReactNode) => void
@@ -94,7 +95,7 @@ export function DriveLayout() {
   }
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-bg text-text">
+    <div className={cn('flex w-full overflow-hidden bg-bg text-text', isDesktop ? 'h-full' : 'h-dvh')}>
       <div className="hidden w-[248px] shrink-0 lg:block">
         <Sidebar accounts={accounts} onUpload={openUpload} />
       </div>
