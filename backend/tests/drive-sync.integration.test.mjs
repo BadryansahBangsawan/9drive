@@ -18,9 +18,11 @@ const APP = 'app-id'
 const drive = {
   items: new Map(),
   changes: [],
+  changesPage: Infinity,   // changes per changes.list page
   reset() {
     this.items = new Map()
     this.changes = []
+    this.changesPage = Infinity
     this.put({ id: APP, name: '9drive', mimeType: FOLDER, parents: [MY_DRIVE] })
   },
   put(item) {
@@ -42,7 +44,10 @@ const drive = {
       getStartPageToken: async () => ({ data: { startPageToken: String(drive.changes.length) } }),
       list: async ({ pageToken }) => {
         if (pageToken === 'bad') throw Object.assign(new Error('Invalid page token'), { response: { status: 404 } })
-        return { data: { changes: drive.changes.slice(Number(pageToken)), newStartPageToken: String(drive.changes.length) } }
+        const start = Number(pageToken)
+        const end = start + drive.changesPage
+        if (end < drive.changes.length) return { data: { changes: drive.changes.slice(start, end), nextPageToken: String(end) } }
+        return { data: { changes: drive.changes.slice(start), newStartPageToken: String(drive.changes.length) } }
       },
     },
   },
@@ -213,4 +218,46 @@ test('removing the import drops the Drive tree but keeps files uploaded through 
   assert.ok(await folderByDrive('X'))
   const acct = await prisma.connectedAccount.findUnique({ where: { id: account.id } })
   assert.equal(acct.driveChangesToken, null)
+})
+
+test('incremental sync works page by page: parents in later pages, app-side placement, latest change wins', { skip }, async () => {
+  await fresh(); seedDrive(); await run()
+  const P = await prisma.folder.create({ data: { userId: user.id, name: 'No mirror', source: 'app' } })
+  await prisma.file.updateMany({ where: { providerFileId: 'x1' }, data: { folderId: P.id } })   // a placement Drive can't represent
+  drive.changesPage = 2
+  drive.put({ id: 'g1', name: 'g1.txt', mimeType: 'text/plain', parents: ['GC'] })    // page 1: a file in a new folder...
+  drive.put({ id: 'GC', name: 'Grandchild', mimeType: FOLDER, parents: ['GP'] })       // ...whose own parent is new too
+  drive.put({ id: 'x1', name: 'x1-renamed.txt' })                                      // page 2
+  drive.put({ id: 'GP', name: 'Grandparent', mimeType: FOLDER, parents: ['B'] })       // page 2: the parent arrives
+  drive.put({ id: 'r1', name: 'r1-first.txt' })                                        // page 3
+  drive.put({ id: 'r1', name: 'r1-second.txt' })
+  drive.put({ id: 'g1', name: 'g1-final.txt' })                                        // page 4: newer data for a waiting file
+  const result = await run()
+  assert.equal(result.mode, 'incremental')
+  const GP = await folderByDrive('GP'), GC = await folderByDrive('GC')
+  assert.equal(GP.parentId, (await folderByDrive('B')).id)
+  assert.equal(GC.parentId, GP.id)
+  const g1 = await fileByDrive('g1')
+  assert.deepEqual([g1.folderId, g1.name], [GC.id, 'g1-final.txt'])
+  const x1 = await fileByDrive('x1')
+  assert.deepEqual([x1.name, x1.folderId], ['x1-renamed.txt', P.id])
+  assert.equal((await fileByDrive('r1')).name, 'r1-second.txt')
+  assert.equal(await prisma.file.count({ where: { providerFileId: 'g1' } }), 1)
+  const quiet = await run()
+  assert.deepEqual([quiet.created, quiet.updated, quiet.deleted], [0, 0, 0])
+})
+
+test('removing a large import goes in batches and drops invites on the removed files', { skip }, async () => {
+  await fresh(); seedDrive(); await run()
+  const A = await folderByDrive('A')
+  const rows = Array.from({ length: 4500 }, (_, i) => ({ userId: user.id, connectedAccountId: account.id, provider: 'google_drive', providerFileId: `bulk-${i}`, name: `f${i}`, mimeType: 'text/plain', sizeBytes: 1n, folderId: A.id }))
+  await prisma.file.createMany({ data: rows })
+  const invited = await fileByDrive('bulk-4321')
+  await prisma.workspaceInvite.create({ data: { inviterId: user.id, inviteeEmail: 'x@example.com', targetId: invited.id } })
+  const removed = await sync.removeImportedDrive(user.id, account.id)
+  assert.equal(removed.files, 4500 + 3)   // the bulk rows plus a1, b1, r1
+  assert.equal(await prisma.file.count({ where: { providerFileId: { startsWith: 'bulk-' } } }), 0)
+  assert.equal(await prisma.workspaceInvite.count(), 0)
+  assert.ok(await fileByDrive('u1'))
+  assert.ok(await folderByDrive('X'))
 })

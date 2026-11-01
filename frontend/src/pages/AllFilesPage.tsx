@@ -24,6 +24,7 @@ import { createPlyr, ensurePlyr } from '@/lib/plyr'
 import { getPreviewKind, officeViewerUrl } from '@/lib/preview'
 import { cn } from '@/lib/utils'
 import type { FileItem, FolderItem } from '@/types/drive'
+import { FolderPicker } from '@/components/drive/FolderPicker'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 
 type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccount?: { id: string; email: string; provider: string; displayName?: string | null }; folder?: { id: string; name: string } | null }
@@ -189,7 +190,7 @@ export function AllFilesPage() {
   const [shareLinks, setShareLinks] = useState<Map<string, string | null>>(new Map())
   const [sharesLoaded, setSharesLoaded] = useState(false)
   const [folders, setFolders] = useState<FolderItem[]>([])
-  const [allFolders, setAllFolders] = useState<FolderItem[]>([])
+  const [folderPath, setFolderPath] = useState<{ id: string; name: string }[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState('')
   const [folderName, setFolderName] = useState('')
   const [folderIconUrl, setFolderIconUrl] = useState(defaultFolderIconUrl)
@@ -245,14 +246,17 @@ export function AllFilesPage() {
     if (data.hasMore) setMessage(`Showing the newest ${data.files.length.toLocaleString()} files. Search or filter to narrow it down.`)
   }
 
+  // Only the folders on screen, plus the open folder's path for the breadcrumb: an imported Drive
+  // can hold tens of thousands of folders.
   async function loadFolders() {
-    const visiblePath = activeFolderId ? `/folders?parentId=${activeFolderId}` : '/folders'
-    const [visibleData, allData] = await Promise.all([
-      apiFetch<{ folders: BackendFolder[] }>(visiblePath),
-      apiFetch<{ folders: BackendFolder[] }>('/folders?all=1'),
+    const visiblePath = activeFolderId ? `/folders?parentId=${encodeURIComponent(activeFolderId)}` : '/folders'
+    const [visibleData, pathData] = await Promise.all([
+      apiFetch<{ folders: BackendFolder[]; hasMore?: boolean }>(visiblePath),
+      activeFolderId ? apiFetch<{ path: { id: string; name: string }[] }>(`/folders/${encodeURIComponent(activeFolderId)}/path`) : Promise.resolve({ path: [] }),
     ])
     setFolders(visibleData.folders.map(mapFolder))
-    setAllFolders(allData.folders.map(mapFolder))
+    setFolderPath(pathData.path)
+    if (visibleData.hasMore) setMessage(`Showing ${visibleData.folders.length.toLocaleString()} folders. Search to find the rest.`)
   }
 
   async function loadShares() {
@@ -718,20 +722,8 @@ export function AllFilesPage() {
     // loadAll closes over the current folder, search and filters, so re-subscribe when any change.
   }, [activeFolderId, searchQuery, filterKey])
 
-  const activeFolder = allFolders.find((folder) => folder.id === activeFolderId)
-  const folderBreadcrumbs = (() => {
-    if (!activeFolder) return []
-    const foldersById = new Map(allFolders.map((folder) => [folder.id, folder]))
-    const path: FolderItem[] = []
-    const visited = new Set<string>()
-    let current: FolderItem | undefined = activeFolder
-    while (current?.id && !visited.has(current.id)) {
-      path.unshift(current)
-      visited.add(current.id)
-      current = current.parentId ? foldersById.get(current.parentId) : undefined
-    }
-    return path
-  })()
+  const folderBreadcrumbs = activeFolderId && folderPath[folderPath.length - 1]?.id === activeFolderId ? folderPath : []
+  const activeFolder = folderBreadcrumbs[folderBreadcrumbs.length - 1]
   const crumbKey = folderBreadcrumbs.map((folder) => `${folder.id}:${folder.name}`).join('|')
 
   useEffect(() => {
@@ -949,10 +941,7 @@ export function AllFilesPage() {
       >
         <form id="move-file-form" onSubmit={moveFile} className="grid gap-3">
           <p className="truncate text-[13px] text-muted">{targetIds.length > 1 ? `Move ${targetIds.length} files` : files.find((file) => file.id === targetIds[0])?.name ?? ''}</p>
-          <select className={selectClass} value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)} aria-label="Destination folder">
-            <option value="">No folder</option>
-            {allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-          </select>
+          {moveOpen ? <FolderPicker value={selectedFolderId} onChange={setSelectedFolderId} /> : null}
         </form>
       </Dialog>
       <Dialog

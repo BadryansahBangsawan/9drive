@@ -5,6 +5,7 @@ import { Dialog } from '@/components/ui/dialog'
 import { apiFetch, formatBytes } from '@/lib/api'
 import { accountLabel, type ConnectedAccount } from '@/lib/accounts'
 import { cn } from '@/lib/utils'
+import { FolderPicker } from '@/components/drive/FolderPicker'
 import { useUpload } from '@/context/UploadContext'
 
 const selectClass = 'h-9 w-full rounded-lg border border-border bg-bg px-3 text-[13px] text-text outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent/25'
@@ -14,7 +15,6 @@ export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClo
   const { uploadFiles } = useUpload()
   const [files, setFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
-  const [folders, setFolders] = useState<{ id: string; name: string }[]>([])
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
   const [targetFolderId, setTargetFolderId] = useState('')
   const [targetAccountId, setTargetAccountId] = useState('')
@@ -26,13 +26,9 @@ export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClo
     setTargetFolderId(folderId ?? '')
     setTargetAccountId('')
     let cancelled = false
-    Promise.all([
-      apiFetch<{ folders: { id: string; name: string }[] }>('/folders?all=1'),
-      apiFetch<{ accounts: ConnectedAccount[] }>('/connected-accounts'),
-    ])
-      .then(([folderData, accountData]) => {
+    apiFetch<{ accounts: ConnectedAccount[] }>('/connected-accounts')
+      .then((accountData) => {
         if (cancelled) return
-        setFolders(folderData.folders)
         setAccounts(accountData.accounts ?? [])
       })
       .catch((error) => console.error('Failed to load upload destinations', error))
@@ -112,13 +108,7 @@ export function UploadDialog({ open, onClose, folderId }: { open: boolean; onClo
           </ul>
         ) : null}
 
-        <label className={fieldLabelClass}>
-          Destination folder
-          <select className={selectClass} value={targetFolderId} onChange={(event) => setTargetFolderId(event.target.value)}>
-            <option value="">No folder</option>
-            {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-          </select>
-        </label>
+        {open ? <FolderPicker value={targetFolderId} onChange={setTargetFolderId} /> : null}
         <label className={fieldLabelClass}>
           Destination account
           <select className={selectClass} value={targetAccountId} onChange={(event) => setTargetAccountId(event.target.value)}>

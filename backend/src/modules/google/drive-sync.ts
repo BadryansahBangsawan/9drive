@@ -25,6 +25,7 @@ import { ensureGoogleAppFolder, getAuthedGoogleClient, googleDriveFolderMimeType
 const GOOGLE_APPS_PREFIX = 'application/vnd.google-apps.'
 const CREATE_BATCH = 500
 const SWEEP_BATCH = 2000
+const LOOKUP_BATCH = 1000
 const FULL_SYNC_EVERY_MS = 24 * 60 * 60_000
 const HIDDEN = Symbol('hidden')
 type Placement = string | null | typeof HIDDEN
@@ -78,22 +79,51 @@ class Reconciler {
   appFolderId = ''
   myDriveId = ''
   accountRoot!: FolderRow
-  // This account's folder rows by Drive folder id, and every folder of the user by row id.
+  // This account's folder rows by Drive folder id, and folders of the user by row id. A full import
+  // loads every folder (it needs the whole tree); an incremental sync loads only the folders each
+  // page of changes refers to (prefetchFolders).
   rowByDriveId = new Map<string, FolderRow>()
   folderById = new Map<string, FolderRow>()
+  private allLoaded = false
 
   constructor(readonly account: ConnectedAccount, readonly drive: drive_v3.Drive) {}
 
   get userId() { return this.account.userId }
 
-  async load(myDriveId?: string) {
+  async load(options: { myDriveId?: string; allFolders: boolean }) {
     this.appFolderId = await ensureGoogleAppFolder(this.account)
-    this.myDriveId = myDriveId ?? (await this.drive.files.get({ fileId: 'root', fields: 'id' })).data.id ?? ''
+    this.myDriveId = options.myDriveId ?? (await this.drive.files.get({ fileId: 'root', fields: 'id' })).data.id ?? ''
     if (!this.myDriveId) throw new Error('Google Drive did not return the My Drive folder id.')
-    this.accountRoot = await ensureAccountRootFolder(this.account, this.myDriveId)
-    const folders = await prisma.folder.findMany({ where: { userId: this.userId }, select: folderSelect })
-    this.folderById = new Map(folders.map((f) => [f.id, f]))
-    this.rowByDriveId = new Map(folders.filter((f) => f.connectedAccountId === this.account.id && f.providerFolderId).map((f) => [f.providerFolderId!, f]))
+    const root = await ensureAccountRootFolder(this.account, this.myDriveId)
+    this.accountRoot = { id: root.id, parentId: root.parentId, connectedAccountId: root.connectedAccountId, providerFolderId: root.providerFolderId, source: root.source, name: root.name, deletedAt: root.deletedAt, deletedBySync: root.deletedBySync, updatedAt: root.updatedAt }
+    if (options.allFolders) {
+      const folders = await prisma.folder.findMany({ where: { userId: this.userId }, select: folderSelect })
+      for (const folder of folders) this.remember(folder)
+      this.allLoaded = true
+    } else {
+      this.remember(this.accountRoot)
+    }
+  }
+
+  private remember(folder: FolderRow) {
+    this.folderById.set(folder.id, folder)
+    if (folder.connectedAccountId === this.account.id && folder.providerFolderId) this.rowByDriveId.set(folder.providerFolderId, folder)
+  }
+
+  // Loads the folder rows a batch of changes refers to: this account's folders by Drive id, and
+  // any of the user's folders by row id (parents that keepsAppParent looks at).
+  async prefetchFolders(refs: { driveIds?: Iterable<string | null | undefined>; rowIds?: Iterable<string | null | undefined> }) {
+    if (this.allLoaded) return
+    const driveIds = [...new Set(refs.driveIds ?? [])].filter((id): id is string => !!id && id !== this.myDriveId && id !== this.appFolderId && !this.rowByDriveId.has(id))
+    const rowIds = [...new Set(refs.rowIds ?? [])].filter((id): id is string => !!id && !this.folderById.has(id))
+    for (let i = 0; i < driveIds.length; i += LOOKUP_BATCH) {
+      const rows = await prisma.folder.findMany({ where: { userId: this.userId, connectedAccountId: this.account.id, providerFolderId: { in: driveIds.slice(i, i + LOOKUP_BATCH) } }, select: folderSelect })
+      for (const row of rows) this.remember(row)
+    }
+    for (let i = 0; i < rowIds.length; i += LOOKUP_BATCH) {
+      const rows = await prisma.folder.findMany({ where: { userId: this.userId, id: { in: rowIds.slice(i, i + LOOKUP_BATCH) } }, select: folderSelect })
+      for (const row of rows) this.remember(row)
+    }
   }
 
   editedDuringSync(row: { updatedAt: Date }) {
@@ -138,8 +168,7 @@ class Reconciler {
       data: { userId: this.userId, connectedAccountId: this.account.id, provider: 'google_drive', providerFolderId: item.id, source, name, parentId: parent.place, color: defaultFolderColor, iconUrl: defaultFolderIconUrl },
       select: folderSelect,
     })
-    this.rowByDriveId.set(item.id, folder)
-    this.folderById.set(folder.id, folder)
+    this.remember(folder)
     return folder.id
   }
 
@@ -244,7 +273,7 @@ async function runFullSync(account: ConnectedAccount, drive: drive_v3.Drive) {
   const r = new Reconciler(account, drive)
   // Take the changes-feed position before listing, so nothing changed during the listing is missed.
   const startPageToken = (await drive.changes.getStartPageToken({})).data.startPageToken ?? null
-  await r.load()
+  await r.load({ allFolders: true })
 
   // Only what this account owns: "Shared with me" items are not part of its My Drive.
   // ---- Folders: the whole tree is needed for placement (ids, names and parents only) ----
@@ -315,77 +344,116 @@ async function runFullSync(account: ConnectedAccount, drive: drive_v3.Drive) {
 
 class ChangesTokenRejected extends Error {}
 
-async function runIncrementalSync(account: ConnectedAccount, drive: drive_v3.Drive) {
-  const r = new Reconciler(account, drive)
-  const changes: drive_v3.Schema$Change[] = []
-  let pageToken: string | undefined = account.driveChangesToken ?? undefined
-  let newStartPageToken: string | undefined
-  try {
-    while (pageToken) {
-      const response = await drive.changes.list({
-        pageToken, spaces: 'drive', pageSize: 1000, includeRemoved: true, restrictToMyDrive: true,
-        fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,parents,createdTime,trashed,ownedByMe))',
-      })
-      changes.push(...(response.data.changes ?? []))
-      pageToken = response.data.nextPageToken ?? undefined
-      newStartPageToken = response.data.newStartPageToken ?? newStartPageToken
-    }
-  } catch (error) {
-    // An expired or invalid page token: start over with a full import.
-    const e = error as { response?: { status?: number }; status?: number; code?: number | string }
-    const status = Number(e.response?.status ?? e.status ?? e.code)
-    if (status === 400 || status === 404 || status === 410) throw new ChangesTokenRejected()
-    throw error
-  }
-
-  // Latest change per item; the root folder id comes from the 'Drive · email' row when known.
-  const latest = new Map<string, drive_v3.Schema$Change>()
-  for (const change of changes) if (change.fileId) latest.set(change.fileId, change)
-  const accountRoot = await prisma.folder.findFirst({ where: { userId: account.userId, connectedAccountId: account.id, source: 'drive_root', deletedAt: null } })
-  await r.load(accountRoot?.providerFolderId ?? undefined)
-
-  const goneIds: string[] = []
-  const folderItems: DriveItem[] = []
-  const fileItems: DriveItem[] = []
-  for (const [fileId, change] of latest) {
-    const item = change.file ? toItem(change.file) : undefined
-    if (change.removed || !item || change.file?.trashed || change.file?.ownedByMe === false) goneIds.push(fileId)
-    else if (item.mimeType === FOLDER_MIME) { if (item.id !== r.appFolderId && item.id !== r.myDriveId) folderItems.push(item) }
-    else if (isImportable(item.mimeType)) fileItems.push(item)
-  }
-
-  // ---- Folders: place those whose parent is known; repeat until no progress (a new folder can
-  // arrive in the same batch as its parent). What's left has an unseen parent: My Drive. ----
-  let pending = folderItems
-  while (pending.length > 0) {
+// Places folders whose parent is known, repeating until no progress (a new folder can arrive with
+// its parent). Returns those still waiting for their parent.
+async function placeFolders(r: Reconciler, items: Iterable<DriveItem>) {
+  let pending = [...items]
+  for (;;) {
     const next: DriveItem[] = []
     for (const item of pending) {
       const parent = r.placementOfDriveFolder(item.parents?.[0])
       if (parent) await r.reconcileFolder(item, parent)
       else next.push(item)
     }
-    if (next.length === pending.length) {
-      for (const item of next) await r.reconcileFolder(item, { place: r.accountRoot.id, inApp: false })
-      break
-    }
+    if (next.length === pending.length) return next
     pending = next
   }
+}
 
-  // ---- Files ----
-  const existing = await r.existingFiles([...fileItems.map((f) => f.id), ...goneIds])
+// Creates or updates File rows for Drive files whose parent folder is placed.
+async function placeFiles(r: Reconciler, items: DriveItem[], existing: Map<string, FileRow>) {
   const toCreate: Prisma.FileCreateManyInput[] = []
-  for (const item of fileItems) {
+  for (const item of items) {
     const place = r.placementOfDriveFolder(item.parents?.[0])?.place ?? r.accountRoot.id
     const row = await r.reconcileFile(item, place, existing.get(item.id))
     if (row) toCreate.push(row)
   }
   await r.createFiles(toCreate)
+}
 
-  // ---- Gone: trashed, deleted or no longer owned ----
-  await r.filesGone(goneIds.map((id) => existing.get(id)).filter((f): f is FileRow => !!f))
-  for (const id of goneIds) {
-    const row = r.rowByDriveId.get(id)
-    if (row) await r.folderGone(row)
+// Applies the Drive changes feed one page (up to 1,000 changes) at a time. Folders whose parent
+// hasn't shown up yet, and files inside them, wait until the end of the run; a later change to the
+// same item replaces the waiting one.
+async function runIncrementalSync(account: ConnectedAccount, drive: drive_v3.Drive) {
+  const r = new Reconciler(account, drive)
+  const waitingFolders = new Map<string, DriveItem>()
+  const waitingFiles = new Map<string, DriveItem>()
+  let loaded = false
+  let pageToken: string | undefined = account.driveChangesToken ?? undefined
+  let newStartPageToken: string | undefined
+
+  while (pageToken) {
+    let data: drive_v3.Schema$ChangeList
+    try {
+      data = (await drive.changes.list({
+        pageToken, spaces: 'drive', pageSize: 1000, includeRemoved: true, restrictToMyDrive: true,
+        fields: 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,parents,createdTime,trashed,ownedByMe))',
+      })).data
+    } catch (error) {
+      // An expired or invalid page token: start over with a full import.
+      const e = error as { response?: { status?: number }; status?: number; code?: number | string }
+      const status = Number(e.response?.status ?? e.status ?? e.code)
+      if (status === 400 || status === 404 || status === 410) throw new ChangesTokenRejected()
+      throw error
+    }
+    pageToken = data.nextPageToken ?? undefined
+    newStartPageToken = data.newStartPageToken ?? newStartPageToken
+
+    if (!loaded) {
+      // The root folder id comes from the 'Drive · email' row when known.
+      const accountRoot = await prisma.folder.findFirst({ where: { userId: account.userId, connectedAccountId: account.id, source: 'drive_root', deletedAt: null }, select: { providerFolderId: true } })
+      await r.load({ myDriveId: accountRoot?.providerFolderId ?? undefined, allFolders: false })
+      loaded = true
+    }
+
+    // Latest change per item within the page.
+    const latest = new Map<string, drive_v3.Schema$Change>()
+    for (const change of data.changes ?? []) if (change.fileId) latest.set(change.fileId, change)
+    const goneIds: string[] = []
+    const folderItems: DriveItem[] = []
+    const fileItems: DriveItem[] = []
+    for (const [fileId, change] of latest) {
+      waitingFolders.delete(fileId)
+      waitingFiles.delete(fileId)
+      const item = change.file ? toItem(change.file) : undefined
+      if (change.removed || !item || change.file?.trashed || change.file?.ownedByMe === false) goneIds.push(fileId)
+      else if (item.mimeType === FOLDER_MIME) { if (item.id !== r.appFolderId && item.id !== r.myDriveId) folderItems.push(item) }
+      else if (isImportable(item.mimeType)) fileItems.push(item)
+    }
+    latest.clear()
+
+    // Load only the rows this page refers to.
+    await r.prefetchFolders({ driveIds: [...folderItems.map((i) => i.id), ...[...folderItems, ...fileItems].map((i) => i.parents?.[0]), ...goneIds] })
+    const existing = await r.existingFiles([...fileItems.map((f) => f.id), ...goneIds])
+    await r.prefetchFolders({ rowIds: [...[...existing.values()].map((f) => f.folderId), ...folderItems.map((i) => r.rowByDriveId.get(i.id)?.parentId)] })
+
+    for (const item of await placeFolders(r, folderItems)) waitingFolders.set(item.id, item)
+    const placeable: DriveItem[] = []
+    for (const item of fileItems) {
+      if (waitingFolders.has(item.parents?.[0] ?? '')) waitingFiles.set(item.id, item)
+      else placeable.push(item)
+    }
+    await placeFiles(r, placeable, existing)
+
+    // Gone: trashed, deleted or no longer owned.
+    await r.filesGone(goneIds.map((id) => existing.get(id)).filter((f): f is FileRow => !!f))
+    for (const id of goneIds) {
+      const row = r.rowByDriveId.get(id)
+      if (row) await r.folderGone(row)
+    }
+  }
+
+  // What waited: folders whose parent appeared later; the rest have an unseen parent (My Drive).
+  if (waitingFolders.size > 0) {
+    for (const item of await placeFolders(r, waitingFolders.values())) await r.reconcileFolder(item, { place: r.accountRoot.id, inApp: false })
+    waitingFolders.clear()
+  }
+  if (waitingFiles.size > 0) {
+    const items = [...waitingFiles.values()]
+    waitingFiles.clear()
+    const existing = await r.existingFiles(items.map((f) => f.id))
+    await r.prefetchFolders({ rowIds: [...existing.values()].map((f) => f.folderId) })
+    await placeFiles(r, items, existing)
   }
 
   if (newStartPageToken) await prisma.connectedAccount.update({ where: { id: account.id }, data: { driveChangesToken: newStartPageToken } })
@@ -409,6 +477,12 @@ async function runSync(account: ConnectedAccount, forceFull: boolean): Promise<G
     r = await runFullSync(account, drive)
   }
   await syncGoogleQuota(account.id).catch(() => undefined)
+  const memory = process.memoryUsage()
+  console.log('[drive-sync] done', {
+    accountId: account.id, mode, created: r.created, updated: r.updated, deleted: r.deleted,
+    seconds: Math.round((Date.now() - r.startedAt.getTime()) / 1000),
+    heapUsedMB: Math.round(memory.heapUsed / 1048576), rssMB: Math.round(memory.rss / 1048576),
+  })
   return { accountId: account.id, mode, created: r.created, updated: r.updated, deleted: r.deleted }
 }
 
@@ -434,15 +508,25 @@ export async function removeImportedDrive(userId: string, accountId: string) {
   await running.get(accountId)?.catch(() => undefined)   // let an in-flight import finish first
   // The next connect starts over with a full import.
   await prisma.connectedAccount.updateMany({ where: { id: accountId, userId }, data: { driveChangesToken: null, driveFullSyncAt: null } })
-  const folders = await prisma.folder.findMany({ where: { userId, connectedAccountId: accountId, source: { in: ['drive', 'drive_root'] } }, select: { id: true } })
-  const folderIds = folders.map((f) => f.id)
-  if (folderIds.length === 0) return { folders: 0, files: 0 }
-  const files = await prisma.file.findMany({ where: { userId, connectedAccountId: accountId, folderId: { in: folderIds } }, select: { id: true } })
-  const fileIds = files.map((f) => f.id)
-  await prisma.workspaceInvite.deleteMany({ where: { inviterId: userId, targetId: { in: [...fileIds, ...folderIds] } } })
-  await prisma.file.deleteMany({ where: { id: { in: fileIds }, userId } })
-  await prisma.folder.deleteMany({ where: { id: { in: folderIds }, userId } })
-  return { folders: folderIds.length, files: fileIds.length }
+  // A batch at a time: an imported My Drive can hold hundreds of thousands of rows.
+  const imported = { userId, connectedAccountId: accountId, source: { in: ['drive', 'drive_root'] } }
+  let files = 0
+  for (;;) {
+    const batch = await prisma.file.findMany({ where: { userId, connectedAccountId: accountId, folder: imported }, select: { id: true }, take: SWEEP_BATCH })
+    if (batch.length === 0) break
+    const ids = batch.map((f) => f.id)
+    await prisma.workspaceInvite.deleteMany({ where: { inviterId: userId, targetId: { in: ids } } })
+    files += (await prisma.file.deleteMany({ where: { id: { in: ids }, userId } })).count
+  }
+  let folders = 0
+  for (;;) {
+    const batch = await prisma.folder.findMany({ where: imported, select: { id: true }, take: SWEEP_BATCH })
+    if (batch.length === 0) break
+    const ids = batch.map((f) => f.id)
+    await prisma.workspaceInvite.deleteMany({ where: { inviterId: userId, targetId: { in: ids } } })
+    folders += (await prisma.folder.deleteMany({ where: { id: { in: ids }, userId } })).count
+  }
+  return { folders, files }
 }
 
 function logSyncError(accountId: string, error: unknown) {

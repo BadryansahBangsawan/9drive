@@ -380,7 +380,7 @@ Accounts      GET  /connected-accounts · DELETE /connected-accounts/:id · POST
 Storage       GET  /storage/summary · GET /storage/breakdown
               GET  /storage/routing-policy · PATCH /storage/routing-policy
 
-Folders       GET  /folders?parentId=<id> · GET /folders?all=1 · GET /folders/recent?limit=4
+Folders       GET  /folders?parentId=<id> · GET /folders?q=<name> · GET /folders/:id/path · GET /folders/recent?limit=4
               POST /folders · PATCH /folders/:id · DELETE /folders/:id
 
 Files         GET  /files · /files?folderId=<id> · /files?q=<search> · GET /files/:id · GET /files/trash

@@ -25,6 +25,45 @@ const createSchema = z.object({
 
 const folderSelect = { id: true, name: true, color: true, iconUrl: true, parentId: true, providerFolderId: true, connectedAccountId: true, source: true, createdAt: true, updatedAt: true } as const
 
+// An imported My Drive can hold tens of thousands of folders: lists are capped, and nothing loads
+// every folder at once.
+const FOLDER_LIST_CAP = 2000
+const ID_BATCH = 1000
+
+// Ids of a folder and everything below it (not deleted), one tree level at a time.
+async function folderWithDescendants(userId: string, rootId: string) {
+  const ids = new Set([rootId])
+  let frontier = [rootId]
+  while (frontier.length > 0) {
+    const next: string[] = []
+    for (let i = 0; i < frontier.length; i += ID_BATCH) {
+      const children = await prisma.folder.findMany({ where: { userId, deletedAt: null, parentId: { in: frontier.slice(i, i + ID_BATCH) } }, select: { id: true } })
+      for (const child of children) {
+        if (ids.has(child.id)) continue   // a parent cycle in bad data must not loop forever
+        ids.add(child.id)
+        next.push(child.id)
+      }
+    }
+    frontier = next
+  }
+  return [...ids]
+}
+
+// The folder and its ancestors, from the top level down (deleted folders end the chain).
+async function folderPath(userId: string, folderId: string) {
+  const path: Array<{ id: string; name: string; parentId: string | null }> = []
+  const visited = new Set<string>()
+  let id: string | null = folderId
+  while (id && !visited.has(id)) {
+    visited.add(id)
+    const folder: { id: string; name: string; parentId: string | null } | null = await prisma.folder.findFirst({ where: { id, userId, deletedAt: null }, select: { id: true, name: true, parentId: true } })
+    if (!folder) break
+    path.unshift(folder)
+    id = folder.parentId
+  }
+  return path
+}
+
 function serializeFolder(folder: { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; connectedAccountId?: string | null; source?: string; createdAt: Date; updatedAt: Date }) {
   return { ...folder, providerFolderId: folder.providerFolderId ?? null, connectedAccountId: folder.connectedAccountId ?? null, createdAt: folder.createdAt.toISOString(), updatedAt: folder.updatedAt.toISOString() }
 }
@@ -72,14 +111,32 @@ async function ensureProviderFolderIds(
 
 folderRouter.get('/', async (req: AuthRequest, res, next) => {
   try {
-    const query = z.object({ parentId: z.string().nullable().optional(), all: z.string().optional() }).parse(req.query)
+    const query = z.object({
+      parentId: z.string().nullable().optional(),
+      q: z.string().trim().min(1).max(255).optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+    }).parse(req.query)
+    if (query.q) {
+      // Name search across every folder (folder pickers): small, with the parent's name to tell
+      // same-named folders apart.
+      const folders = await prisma.folder.findMany({
+        where: { userId: req.user!.id, deletedAt: null, name: { contains: query.q } },
+        select: { ...folderSelect, parent: { select: { name: true } } },
+        orderBy: { updatedAt: 'desc' },
+        take: query.limit ?? 50,
+      })
+      return res.json({ folders: folders.map(({ parent, ...folder }) => ({ ...serializeFolder(folder), parentName: parent?.name ?? null })) })
+    }
     const folders = await prisma.folder.findMany({
-      where: { userId: req.user!.id, deletedAt: null, ...(query.all === '1' ? {} : { parentId: query.parentId ?? null }) },
+      where: { userId: req.user!.id, deletedAt: null, parentId: query.parentId ?? null },
       select: folderSelect,
       orderBy: { updatedAt: 'desc' },
+      take: FOLDER_LIST_CAP + 1,
     })
+    const hasMore = folders.length > FOLDER_LIST_CAP
+    if (hasMore) folders.length = FOLDER_LIST_CAP
     await ensureProviderFolderIds(folders, req.user!.id)
-    return res.json({ folders: folders.map(serializeFolder) })
+    return res.json({ folders: folders.map(serializeFolder), hasMore })
   } catch (error) {
     return next(error)
   }
@@ -96,6 +153,14 @@ folderRouter.get('/recent', async (req: AuthRequest, res, next) => {
     })
     await ensureProviderFolderIds(folders, req.user!.id)
     return res.json({ folders: folders.map(serializeFolder) })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+folderRouter.get('/:id/path', async (req: AuthRequest, res, next) => {
+  try {
+    return res.json({ path: await folderPath(req.user!.id, String(req.params.id)) })
   } catch (error) {
     return next(error)
   }
@@ -168,19 +233,9 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
     let newParent: Folder | null = null
     if (moving && body.parentId) {
       newParent = await prisma.folder.findFirstOrThrow({ where: { id: body.parentId, userId: req.user!.id, deletedAt: null } })
-      const folders = await prisma.folder.findMany({ where: { userId: req.user!.id, deletedAt: null }, select: { id: true, parentId: true } })
-      const descendantIds = new Set<string>([folderId])
-      let changed = true
-      while (changed) {
-        changed = false
-        for (const folder of folders) {
-          if (folder.parentId && descendantIds.has(folder.parentId) && !descendantIds.has(folder.id)) {
-            descendantIds.add(folder.id)
-            changed = true
-          }
-        }
-      }
-      if (descendantIds.has(body.parentId)) return res.status(400).json({ code: 'FOLDER_INVALID_PARENT', message: 'Folder cannot be moved into itself or a child folder.' })
+      // The target is inside this folder when this folder is one of the target's ancestors.
+      const targetPath = await folderPath(req.user!.id, body.parentId)
+      if (targetPath.some((folder) => folder.id === folderId)) return res.status(400).json({ code: 'FOLDER_INVALID_PARENT', message: 'Folder cannot be moved into itself or a child folder.' })
     }
 
     // A folder with a Drive mirror can only go where Drive can follow: a folder with a Drive
@@ -232,24 +287,18 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
       await createAuditLog(req.user!.id, 'DELETE_FOLDER', 'folder', root.id, { name: root.name })
       return res.json({ status: 'ok' })
     }
-    const folders = await prisma.folder.findMany({ where: { userId: req.user!.id, deletedAt: null }, select: { id: true, parentId: true } })
-    const folderIds = new Set<string>([root.id])
-    let changed = true
-    while (changed) {
-      changed = false
-      for (const folder of folders) {
-        if (folder.parentId && folderIds.has(folder.parentId) && !folderIds.has(folder.id)) {
-          folderIds.add(folder.id)
-          changed = true
-        }
-      }
-    }
+    const folderIds = await folderWithDescendants(req.user!.id, root.id)
 
     // Soft delete only: files go to Trash and stay in storage until the user deletes them permanently.
     // Drive folders are left in place because deleting a Drive folder also deletes everything inside it.
+    // Files first, so a failure part way never leaves files hidden inside deleted folders.
     const now = new Date()
-    await prisma.file.updateMany({ where: { userId: req.user!.id, status: 'active', folderId: { in: [...folderIds] } }, data: { status: 'deleted', deletedAt: now, deletedBySync: false } })
-    await prisma.folder.updateMany({ where: { id: { in: [...folderIds] }, userId: req.user!.id }, data: { deletedAt: now, deletedBySync: false } })
+    for (let i = 0; i < folderIds.length; i += ID_BATCH) {
+      await prisma.file.updateMany({ where: { userId: req.user!.id, status: 'active', folderId: { in: folderIds.slice(i, i + ID_BATCH) } }, data: { status: 'deleted', deletedAt: now, deletedBySync: false } })
+    }
+    for (let i = 0; i < folderIds.length; i += ID_BATCH) {
+      await prisma.folder.updateMany({ where: { id: { in: folderIds.slice(i, i + ID_BATCH) }, userId: req.user!.id }, data: { deletedAt: now, deletedBySync: false } })
+    }
 
     await createAuditLog(req.user!.id, 'DELETE_FOLDER', 'folder', root.id, { name: root.name })
     return res.json({ status: 'ok' })

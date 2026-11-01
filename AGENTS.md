@@ -191,8 +191,9 @@ Storage:
 - `GET /storage/breakdown`
 
 Folders:
-- `GET /folders?parentId=<id>`
-- `GET /folders?all=1`
+- `GET /folders?parentId=<id>` (capped at 2,000 plus `hasMore`)
+- `GET /folders?q=<name>&limit=50` (name search, with `parentName`)
+- `GET /folders/:id/path` (ancestors, for breadcrumbs)
 - `GET /folders/recent?limit=4`
 - `POST /folders`
 - `PATCH /folders/:id`
