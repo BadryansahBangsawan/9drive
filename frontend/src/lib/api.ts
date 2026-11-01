@@ -69,7 +69,9 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }))
-    if (response.status === 401) clearAuthSession()
+    // Only a request made with the session can show the session is gone (a failed login or
+    // handoff exchange says nothing about it).
+    if (response.status === 401 && !options.skipAuth) clearAuthSession()
     throw new Error(error.message ?? 'Request failed')
   }
 

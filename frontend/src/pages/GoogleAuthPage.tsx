@@ -6,6 +6,17 @@ import { setAuthSession, type AuthUser } from '@/lib/auth'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
 
+// A handoff token can be exchanged once; effects may run twice (StrictMode, remounts).
+const exchanges = new Map<string, Promise<AuthResponse>>()
+function exchangeOnce(token: string) {
+  let exchange = exchanges.get(token)
+  if (!exchange) {
+    exchange = apiFetch<AuthResponse>('/auth/google/exchange', { method: 'POST', skipAuth: true, body: JSON.stringify({ token }) })
+    exchanges.set(token, exchange)
+  }
+  return exchange
+}
+
 export function GoogleAuthPage() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
@@ -19,7 +30,7 @@ export function GoogleAuthPage() {
       return
     }
 
-    apiFetch<AuthResponse>('/auth/google/exchange', { method: 'POST', skipAuth: true, body: JSON.stringify({ token }) })
+    exchangeOnce(token)
       .then((data) => {
         setAuthSession(data.accessToken, data.refreshToken, data.user)
         navigate('/all-files', { replace: true })
